@@ -92,7 +92,7 @@ jobs:
       # inputs unless `shallow = true;` is specified in the URL —
       # which we can't control from inside the action. Cloning fully
       # is the path of least surprise.
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           fetch-depth: 0
@@ -213,7 +213,7 @@ jobs:
       # Same full-clone rationale as the setup job: Nix flake inputs
       # that reference the local working tree refuse to consume a
       # shallow clone.
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           fetch-depth: 0
@@ -280,7 +280,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       # Same DeterminateSystems-installer rationale as the build job —
       # avoids the macOS runner's eDSRecordAlreadyExists issue.
       # Pinned to an immutable release SHA (was @main — a moving ref, a
