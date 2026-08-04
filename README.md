@@ -52,6 +52,12 @@ jobs:
 Repeat per module. Bumping the submodule pointer (and thereby its
 `metadata.json` `version`) is what triggers a new release.
 
+`module_path` may also name a module inside an application repository,
+for example `submodules/my-app/backend-module`. The workflow resolves and
+checks out the nearest containing registered submodule, then reads and builds
+the requested nested module directory. This lets one source repository publish
+multiple Basecamp modules without cloning unrelated catalogue repositories.
+
 ### Idempotent releases (skip if already published)
 
 `release.yml` skips the (expensive) Nix build when a release tagged
