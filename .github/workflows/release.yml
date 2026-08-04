@@ -121,9 +121,29 @@ jobs:
             # materialise its own (nested) submodules, as before.
             git submodule update --init --recursive
           else
-            # Catalog repo: fetch just this module's submodule and any
-            # nested submodules it declares — skip every sibling.
-            git submodule update --init --recursive -- "${MODULE_PATH}"
+            # `module_path` may point at a module inside an application
+            # repository. Resolve its nearest containing gitlink so we fetch
+            # that one source repository without coupling this release to
+            # unrelated catalogue siblings.
+            source_path="${MODULE_PATH}"
+            while ! git ls-files --stage -- "${source_path}" \
+              | awk -F '\t' -v target="${source_path}" \
+                  '$1 ~ /^160000 / && $2 == target { found=1 } END { exit !found }'; do
+              if [[ "${source_path}" != */* ]]; then
+                echo "::error::${MODULE_PATH} is not inside a registered submodule"
+                exit 1
+              fi
+              source_path="${source_path%/*}"
+            done
+            echo "Checking out source submodule ${source_path} for ${MODULE_PATH}"
+            git submodule update --init -- "${source_path}"
+            module_relative="${MODULE_PATH#"${source_path}"}"
+            module_relative="${module_relative#/}"
+            if [[ -z "${module_relative}" ]]; then
+              git -C "${source_path}" submodule update --init --recursive
+            else
+              git -C "${source_path}" submodule update --init --recursive -- "${module_relative}"
+            fi
           fi
       - id: meta
         name: Read metadata.json
@@ -261,7 +281,25 @@ jobs:
           if [[ -z "${MODULE_PATH:-}" || "${MODULE_PATH}" == "." ]]; then
             git submodule update --init --recursive
           else
-            git submodule update --init --recursive -- "${MODULE_PATH}"
+            source_path="${MODULE_PATH}"
+            while ! git ls-files --stage -- "${source_path}" \
+              | awk -F '\t' -v target="${source_path}" \
+                  '$1 ~ /^160000 / && $2 == target { found=1 } END { exit !found }'; do
+              if [[ "${source_path}" != */* ]]; then
+                echo "::error::${MODULE_PATH} is not inside a registered submodule"
+                exit 1
+              fi
+              source_path="${source_path%/*}"
+            done
+            echo "Checking out source submodule ${source_path} for ${MODULE_PATH}"
+            git submodule update --init -- "${source_path}"
+            module_relative="${MODULE_PATH#"${source_path}"}"
+            module_relative="${module_relative#/}"
+            if [[ -z "${module_relative}" ]]; then
+              git -C "${source_path}" submodule update --init --recursive
+            else
+              git -C "${source_path}" submodule update --init --recursive -- "${module_relative}"
+            fi
           fi
       # DeterminateSystems' installer rather than cachix/install-nix-action@v25,
       # which trips over the macos-latest runner's pre-provisioned _nixbld*
