@@ -126,7 +126,9 @@ jobs:
             # that one source repository without coupling this release to
             # unrelated catalogue siblings.
             source_path="${MODULE_PATH}"
-            while ! git ls-files --stage -- "${source_path}" | grep -q '^160000 '; do
+            while ! git ls-files --stage -- "${source_path}" \
+              | awk -v target="${source_path}" \
+                  '$1 == "160000" && $4 == target { found=1 } END { exit !found }'; do
               if [[ "${source_path}" != */* ]]; then
                 echo "::error::${MODULE_PATH} is not inside a registered submodule"
                 exit 1
@@ -280,7 +282,9 @@ jobs:
             git submodule update --init --recursive
           else
             source_path="${MODULE_PATH}"
-            while ! git ls-files --stage -- "${source_path}" | grep -q '^160000 '; do
+            while ! git ls-files --stage -- "${source_path}" \
+              | awk -v target="${source_path}" \
+                  '$1 == "160000" && $4 == target { found=1 } END { exit !found }'; do
               if [[ "${source_path}" != */* ]]; then
                 echo "::error::${MODULE_PATH} is not inside a registered submodule"
                 exit 1
