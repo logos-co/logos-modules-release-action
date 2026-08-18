@@ -123,7 +123,16 @@ jobs:
           else
             # Catalog repo: fetch just this module's submodule and any
             # nested submodules it declares — skip every sibling.
-            git submodule update --init --recursive -- "${MODULE_PATH}"
+            # MODULE_PATH may point *inside* a submodule (a multi-module
+            # repo, e.g. submodules/<repo>/<module-dir>); git rejects a
+            # pathspec below a submodule boundary, so init the submodule
+            # that contains it. A path with no submodule prefix (a plain
+            # directory of the caller repo) passes through unchanged.
+            target="${MODULE_PATH}"
+            while read -r sub; do
+              if [[ "${MODULE_PATH}/" == "${sub}/"* ]]; then target="${sub}"; break; fi
+            done < <(git config --file .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null | awk '{print $2}')
+            git submodule update --init --recursive -- "${target}"
           fi
       - id: meta
         name: Read metadata.json
@@ -261,7 +270,13 @@ jobs:
           if [[ -z "${MODULE_PATH:-}" || "${MODULE_PATH}" == "." ]]; then
             git submodule update --init --recursive
           else
-            git submodule update --init --recursive -- "${MODULE_PATH}"
+            # Same submodule-prefix resolution as the setup job: MODULE_PATH
+            # may point inside a submodule of a multi-module repo.
+            target="${MODULE_PATH}"
+            while read -r sub; do
+              if [[ "${MODULE_PATH}/" == "${sub}/"* ]]; then target="${sub}"; break; fi
+            done < <(git config --file .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null | awk '{print $2}')
+            git submodule update --init --recursive -- "${target}"
           fi
       # DeterminateSystems' installer rather than cachix/install-nix-action@v25,
       # which trips over the macos-latest runner's pre-provisioned _nixbld*
