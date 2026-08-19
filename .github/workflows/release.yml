@@ -72,6 +72,16 @@ on:
         description: |
           JWK-format Ed25519 secret key. Required iff signing_mode == inline.
         required: false
+      storage_seeder_host:
+        description: |
+          `user@host` of the Logos Storage seeder. Used to upload the built .lgx
+          to Storage and read back its CID.
+        required: false
+      storage_seeder_ssh_key:
+        description: |
+          Private key for storage_seeder_host. Expected to be a restricted key
+          that ignores the command we send and only reads stdin.
+        required: false
 
 jobs:
   setup:
@@ -337,6 +347,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      SEEDER_HOST: ${{ secrets.storage_seeder_host }}
+      SEEDER_SSH_KEY: ${{ secrets.storage_seeder_ssh_key }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       # Same DeterminateSystems-installer rationale as the build job —
@@ -475,6 +488,40 @@ jobs:
           if [[ -f "$LGX_SIGNED_OUT" ]]; then mv "$LGX_SIGNED_OUT" "$LGX_PATH"; fi
           lgx verify "$LGX_PATH"
 
+      - name: Upload to the seeder
+        id: seed
+        if: ${{ env.SEEDER_HOST != '' && env.SEEDER_SSH_KEY != '' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          LGX_PATH: ${{ steps.merge.outputs.lgx }}
+        run: |
+          set -euo pipefail
+
+          # Create a temporary directory to hold the SSH key file.
+          tmpd=$(mktemp -d)
+
+          # Ensure the temporary directory is removed on exit.
+          trap 'rm -rf "$tmpd"' EXIT
+
+          # Copy the SSH key to a temporary file.
+          printf '%s\n' "$SEEDER_SSH_KEY" > "$tmpd/id"
+
+          # Set the permissions of the SSH key.
+          chmod 600 "$tmpd/id"
+
+          # Upload the .lgx file to the seeder and capture the returned CID.
+          # The ssh connection will trigger a script on the seeder that reads
+          # the .lgx from stdin and returns the CID.
+          cid=$(ssh -i "$tmpd/id" -o IdentitiesOnly=yes \
+                    -o StrictHostKeyChecking=no \
+                    "$SEEDER_HOST" "$(basename "$LGX_PATH")" < "$LGX_PATH")
+
+          if [[ -z "$cid" ]]; then
+            echo "::error::the seeder returned no CID"; exit 1
+          fi
+          echo "cid=$cid" >> "$GITHUB_OUTPUT"
+
       - name: Extract manifest & build sidecar JSON
         id: sidecar
         shell: bash
@@ -515,6 +562,7 @@ jobs:
              --arg rootHash "$mroot" \
              --argjson manifest "$manifest" \
              --arg signature "$sig" \
+             --arg cid "${{ steps.seed.outputs.cid }}" \
              --argjson builtVariants "$built_json" \
              --argjson missingVariants "$missing_json" \
              '{
@@ -528,6 +576,9 @@ jobs:
                 manifest:        $manifest
               } + (if ($signature | length) > 0
                    then { signature: ($signature | fromjson) }
+                   else {} end)
+                + (if ($cid | length) > 0
+                   then { cid: $cid }
                    else {} end)' > sidecar.json
           echo "lgx=$lgx" >> "$GITHUB_OUTPUT"
           echo "sidecar=$PWD/sidecar.json" >> "$GITHUB_OUTPUT"
