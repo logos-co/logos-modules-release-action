@@ -72,15 +72,15 @@ on:
         description: |
           JWK-format Ed25519 secret key. Required iff signing_mode == inline.
         required: false
-      storage_seeder_host:
+      storage_seeders:
         description: |
-          `user@host` of the Logos Storage seeder. Used to upload the built .lgx
-          to Storage and read back its CID.
-        required: false
-      storage_seeder_ssh_key:
-        description: |
-          Private key for storage_seeder_host. Expected to be a restricted key
-          that ignores the command we send and only reads stdin.
+          Logos Storage seeders to upload the built .lgx to, as a JSON object
+          keyed by network:
+
+            {
+              "logos.test": ["https://seeder-1", "https://seeder-2"],
+              "logos.dev":  ["https://seeder-3"]
+            }
         required: false
 
 jobs:
@@ -347,9 +347,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    env:
-      SEEDER_HOST: ${{ secrets.storage_seeder_host }}
-      SEEDER_SSH_KEY: ${{ secrets.storage_seeder_ssh_key }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       # Same DeterminateSystems-installer rationale as the build job —
@@ -488,38 +485,62 @@ jobs:
           if [[ -f "$LGX_SIGNED_OUT" ]]; then mv "$LGX_SIGNED_OUT" "$LGX_PATH"; fi
           lgx verify "$LGX_PATH"
 
-      - name: Upload to the seeder
+      - name: Upload to the seeders
         id: seed
-        if: ${{ env.SEEDER_HOST != '' && env.SEEDER_SSH_KEY != '' }}
-        continue-on-error: true
+        if: ${{ secrets.storage_seeders != '' }}
         shell: bash
         env:
+          SEEDERS: ${{ secrets.storage_seeders }}
           LGX_PATH: ${{ steps.merge.outputs.lgx }}
         run: |
           set -euo pipefail
+          name=$(basename "$LGX_PATH")
+          cid=""
 
-          # Create a temporary directory to hold the SSH key file.
-          tmpd=$(mktemp -d)
+          # Loop over the networks
+          for network in $(jq -r 'keys[]' <<<"$SEEDERS"); do
+            # Keep the successful upload count for this network.
+            # Zero successes fails the release, which means the network's
+            # storage nodes are down.
+            ok=0
 
-          # Ensure the temporary directory is removed on exit.
-          trap 'rm -rf "$tmpd"' EXIT
+            endpoints=$(jq -r ".[\"$network\"][]" <<<"$SEEDERS")
+            total=$(wc -w <<<"$endpoints")
 
-          # Copy the SSH key to a temporary file.
-          printf '%s\n' "$SEEDER_SSH_KEY" > "$tmpd/id"
+            if [[ "$total" -eq 0 ]]; then
+              echo "::error::No seeders configured for $network. Stopping the release."
+              exit 1
+            fi
 
-          # Set the permissions of the SSH key.
-          chmod 600 "$tmpd/id"
+            for endpoint in $endpoints; do
+              if ! got=$(curl --fail-with-body \
+                              -X POST \
+                              -H 'Content-Type: application/octet-stream' \
+                              -H "Content-Disposition: attachment; filename=\"$name\"" \
+                              --data-binary @"$LGX_PATH" \
+                              "$endpoint/api/storage/v1/data" 2>&1); then
+                # Syntax to display a warning on GitHub Actions
+                echo "::warning::$network: $endpoint refused the upload: $got"
+                continue
+              fi
 
-          # Upload the .lgx file to the seeder and capture the returned CID.
-          # The ssh connection will trigger a script on the seeder that reads
-          # the .lgx from stdin and returns the CID.
-          cid=$(ssh -i "$tmpd/id" -o IdentitiesOnly=yes \
-                    -o StrictHostKeyChecking=no \
-                    "$SEEDER_HOST" "$(basename "$LGX_PATH")" < "$LGX_PATH")
+              if [[ -z "$cid" ]]; then
+                cid="$got"
+              elif [[ "$got" != "$cid" ]]; then
+                echo "::error::$endpoint answered $got but another node answered $cid, the CID should be the same across the networks."
+                exit 1
+              fi
 
-          if [[ -z "$cid" ]]; then
-            echo "::error::the seeder returned no CID"; exit 1
-          fi
+              ok=$((ok + 1))
+            done
+
+            # Fails if every upload failed for this network, which means its storage nodes are down.
+            if [[ "$ok" -eq 0 ]]; then
+              echo "::error::Failed to upload the LGX package to the $network nodes."
+              exit 1
+            fi
+          done
+
           echo "cid=$cid" >> "$GITHUB_OUTPUT"
 
       - name: Extract manifest & build sidecar JSON
