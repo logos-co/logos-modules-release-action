@@ -347,6 +347,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      SEEDERS: ${{ secrets.storage_seeders }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       # Same DeterminateSystems-installer rationale as the build job —
@@ -487,10 +489,9 @@ jobs:
 
       - name: Upload to the seeders
         id: seed
-        if: ${{ secrets.storage_seeders != '' }}
+        if: ${{ env.SEEDERS != '' }}
         shell: bash
         env:
-          SEEDERS: ${{ secrets.storage_seeders }}
           LGX_PATH: ${{ steps.merge.outputs.lgx }}
         run: |
           set -euo pipefail
