@@ -72,14 +72,14 @@ on:
         description: |
           JWK-format Ed25519 secret key. Required iff signing_mode == inline.
         required: false
-      storage_seeders:
+      storage_nodes:
         description: |
-          Logos Storage seeders to upload the built .lgx to, as a JSON object
+          Logos Storage nodes to upload the built .lgx to, as a JSON object
           keyed by network:
 
             {
-              "logos.test": ["https://seeder-1", "https://seeder-2"],
-              "logos.dev":  ["https://seeder-3"]
+              "logos.test": ["https://storage-node-1", "https://storage-node-2"],
+              "logos.dev":  ["https://storage-node-3"]
             }
         required: false
 
@@ -348,7 +348,7 @@ jobs:
     permissions:
       contents: write
     env:
-      SEEDERS: ${{ secrets.storage_seeders }}
+      STORAGE_NODES: ${{ secrets.STORAGE_NODES }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       # Same DeterminateSystems-installer rationale as the build job —
@@ -487,9 +487,9 @@ jobs:
           if [[ -f "$LGX_SIGNED_OUT" ]]; then mv "$LGX_SIGNED_OUT" "$LGX_PATH"; fi
           lgx verify "$LGX_PATH"
 
-      - name: Upload to the seeders
+      - name: Upload to the storage nodes
         id: seed
-        if: ${{ env.SEEDERS != '' }}
+        if: ${{ env.STORAGE_NODES != '' }}
         shell: bash
         env:
           LGX_PATH: ${{ steps.merge.outputs.lgx }}
@@ -499,17 +499,17 @@ jobs:
           cid=""
 
           # Loop over the networks
-          for network in $(jq -r 'keys[]' <<<"$SEEDERS"); do
+          for network in $(jq -r 'keys[]' <<<"$STORAGE_NODES"); do
             # Keep the successful upload count for this network.
             # Zero successes fails the release, which means the network's
             # storage nodes are down.
             ok=0
 
-            endpoints=$(jq -r ".[\"$network\"][]" <<<"$SEEDERS")
+            endpoints=$(jq -r ".[\"$network\"][]" <<<"$STORAGE_NODES")
             total=$(wc -w <<<"$endpoints")
 
             if [[ "$total" -eq 0 ]]; then
-              echo "::error::No seeders configured for $network. Stopping the release."
+              echo "::error::No storage nodes configured for $network. Stopping the release."
               exit 1
             fi
 
