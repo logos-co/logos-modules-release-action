@@ -348,7 +348,7 @@ jobs:
     permissions:
       contents: write
     env:
-      STORAGE_NODES: ${{ secrets.STORAGE_NODES }}
+      STORAGE_NODES: ${{ secrets.storage_nodes }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       # Same DeterminateSystems-installer rationale as the build job —
@@ -514,7 +514,7 @@ jobs:
             fi
 
             for endpoint in $endpoints; do
-              if ! got=$(curl --fail-with-body \
+              if ! got=$(curl --fail-with-body -sS \
                               -X POST \
                               -H 'Content-Type: application/octet-stream' \
                               -H "Content-Disposition: attachment; filename=\"$name\"" \
