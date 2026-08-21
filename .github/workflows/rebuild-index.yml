@@ -82,7 +82,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: logos-co/logos-modules-release-tool
-          ref: ea5540cda8271899e411f61d3d898eaf5858db39
+          ref: 520eb793c0dbad90b3dc490436a2d64f330f9e87
           path: _tool
 
       # Collect every published `.lgx` URL from the caller's releases.
