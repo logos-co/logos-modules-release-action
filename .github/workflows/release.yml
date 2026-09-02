@@ -72,6 +72,16 @@ on:
         description: |
           JWK-format Ed25519 secret key. Required iff signing_mode == inline.
         required: false
+      storage_nodes:
+        description: |
+          Logos Storage nodes to upload the built .lgx to, as a JSON object
+          keyed by network:
+
+            {
+              "logos.test": ["https://storage-node-1", "https://storage-node-2"],
+              "logos.dev":  ["https://storage-node-3"]
+            }
+        required: false
 
 jobs:
   setup:
@@ -352,6 +362,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      STORAGE_NODES: ${{ secrets.storage_nodes }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       # Same DeterminateSystems-installer rationale as the build job —
@@ -490,6 +502,63 @@ jobs:
           if [[ -f "$LGX_SIGNED_OUT" ]]; then mv "$LGX_SIGNED_OUT" "$LGX_PATH"; fi
           lgx verify "$LGX_PATH"
 
+      - name: Upload to the storage nodes
+        id: seed
+        if: ${{ env.STORAGE_NODES != '' }}
+        shell: bash
+        env:
+          LGX_PATH: ${{ steps.merge.outputs.lgx }}
+        run: |
+          set -euo pipefail
+          name=$(basename "$LGX_PATH")
+          cid=""
+
+          # Loop over the networks
+          for network in $(jq -r 'keys[]' <<<"$STORAGE_NODES"); do
+            # Keep the successful upload count for this network.
+            # Zero successes fails the release, which means the network's
+            # storage nodes are down.
+            ok=0
+
+            endpoints=$(jq -r ".[\"$network\"][]" <<<"$STORAGE_NODES")
+            total=$(wc -w <<<"$endpoints")
+
+            if [[ "$total" -eq 0 ]]; then
+              echo "::error::No storage nodes configured for $network. Stopping the release."
+              exit 1
+            fi
+
+            for endpoint in $endpoints; do
+              if ! got=$(curl --fail-with-body -sS \
+                              -X POST \
+                              -H 'Content-Type: application/octet-stream' \
+                              -H "Content-Disposition: attachment; filename=\"$name\"" \
+                              --data-binary @"$LGX_PATH" \
+                              "$endpoint/api/storage/v1/data" 2>&1); then
+                # Syntax to display a warning on GitHub Actions
+                echo "::warning::$network: $endpoint refused the upload: $got"
+                continue
+              fi
+
+              if [[ -z "$cid" ]]; then
+                cid="$got"
+              elif [[ "$got" != "$cid" ]]; then
+                echo "::error::$endpoint answered $got but another node answered $cid, the CID should be the same across the networks."
+                exit 1
+              fi
+
+              ok=$((ok + 1))
+            done
+
+            # Fails if every upload failed for this network, which means its storage nodes are down.
+            if [[ "$ok" -eq 0 ]]; then
+              echo "::error::Failed to upload the LGX package to the $network nodes."
+              exit 1
+            fi
+          done
+
+          echo "cid=$cid" >> "$GITHUB_OUTPUT"
+
       - name: Extract manifest & build sidecar JSON
         id: sidecar
         shell: bash
@@ -530,6 +599,7 @@ jobs:
              --arg rootHash "$mroot" \
              --argjson manifest "$manifest" \
              --arg signature "$sig" \
+             --arg cid "${{ steps.seed.outputs.cid }}" \
              --argjson builtVariants "$built_json" \
              --argjson missingVariants "$missing_json" \
              '{
@@ -543,6 +613,9 @@ jobs:
                 manifest:        $manifest
               } + (if ($signature | length) > 0
                    then { signature: ($signature | fromjson) }
+                   else {} end)
+                + (if ($cid | length) > 0
+                   then { cid: $cid }
                    else {} end)' > sidecar.json
           echo "lgx=$lgx" >> "$GITHUB_OUTPUT"
           echo "sidecar=$PWD/sidecar.json" >> "$GITHUB_OUTPUT"
