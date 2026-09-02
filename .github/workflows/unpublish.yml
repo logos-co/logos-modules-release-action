@@ -33,6 +33,17 @@ on:
         description: "List what would be deleted and stop (no deletion, no rebuild)."
         type: boolean
         default: false
+    secrets:
+      storage_nodes:
+        description: |
+          Logos Storage nodes to delete the unpublished CIDs from, as a
+          JSON object keyed by network:
+
+            {
+              "logos.test": ["https://storage-node-1", "https://storage-node-2"],
+              "logos.dev":  ["https://storage-node-3"]
+            }
+        required: false
   workflow_dispatch:
     inputs:
       module:
@@ -66,6 +77,7 @@ jobs:
       VERSION: ${{ inputs.version }}
       DELETE_TAGS: ${{ inputs.delete_tags }}
       DRY_RUN: ${{ inputs.dry_run }}
+      STORAGE_NODES: ${{ secrets.storage_nodes }}
     steps:
       - name: Resolve target releases
         id: resolve
@@ -122,6 +134,41 @@ jobs:
             printf '%s\n' "${tags[@]}"
             echo "__TAGS_EOF__"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Delete the CIDs from the storage nodes
+        if: steps.resolve.outputs.count != '0' && inputs.dry_run != true && env.STORAGE_NODES != ''
+        shell: bash
+        env:
+          TAGS: ${{ steps.resolve.outputs.tags }}
+        run: |
+          set -euo pipefail
+
+          endpoints=$(echo "$STORAGE_NODES" | jq -r '.[] | .[]')
+
+          for tag in $TAGS; do
+            rm -f sidecar.json
+
+            if ! gh release download "$tag" --repo "$GH_REPO" \
+                   --pattern sidecar.json --output sidecar.json; then
+              echo "::warning::$tag: cannot read its sidecar.json, skipping the storage deletion"
+              continue
+            fi
+
+            cid=$(jq -r '.cid' sidecar.json)
+
+            if [[ -z "$cid" || "$cid" == "null" ]]; then
+              echo "::notice::$tag: no CID in its sidecar, nothing to delete from storage"
+              continue
+            fi
+
+            for endpoint in $endpoints; do
+              if curl --fail-with-body -sS -X DELETE "$endpoint/api/storage/v1/data/$cid"; then
+                echo "==> $tag: deleted $cid from $endpoint"
+              else
+                echo "::warning::$tag: $endpoint refused to delete $cid"
+              fi
+            done
+          done
 
       - name: Delete releases
         if: steps.resolve.outputs.count != '0' && inputs.dry_run != true
