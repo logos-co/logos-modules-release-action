@@ -83,6 +83,25 @@ on:
           re-pointed at the commit that rebuilt them.
         type: boolean
         default: true
+      tag_template:
+        description: |
+          Template for the release tag. Placeholders: `{name}`,
+          `{version}`, `{sha}` (the module source commit) and
+          `{short_sha}` (its first 8 chars). The default reproduces the
+          historical `<name>-v<version>` scheme, so callers that omit
+          this see no change. A catalog that publishes one release per
+          module *commit* rather than per version sets
+          `{name}-{short_sha}`; `skip_if_published` then means "skip
+          unless this commit is new", which is the correct gate for a
+          continuous-build catalog.
+        type: string
+        default: "{name}-v{version}"
+      release_name_template:
+        description: |
+          Template for the release title. Same placeholders as
+          `tag_template`.
+        type: string
+        default: "{name} v{version}"
     secrets:
       signing_key:
         description: |
@@ -99,6 +118,9 @@ jobs:
     outputs:
       module_name:       ${{ steps.meta.outputs.module_name }}
       version:           ${{ steps.meta.outputs.version }}
+      module_sha:        ${{ steps.meta.outputs.module_sha }}
+      release_tag:       ${{ steps.meta.outputs.release_tag }}
+      release_name:      ${{ steps.meta.outputs.release_name }}
       variants:          ${{ steps.meta.outputs.variants }}
       already_published: ${{ steps.published.outputs.already_published }}
     steps:
@@ -179,6 +201,13 @@ jobs:
       - id: meta
         name: Read metadata.json
         shell: bash
+        # Templates arrive through the environment, never interpolated
+        # into the script body: a `${{ }}` expansion of caller-supplied
+        # text into shell is a script-injection seam (same rationale as
+        # `signing_command` in the release job).
+        env:
+          TAG_TEMPLATE: ${{ inputs.tag_template }}
+          RELEASE_NAME_TEMPLATE: ${{ inputs.release_name_template }}
         run: |
           set -euo pipefail
 
@@ -210,6 +239,35 @@ jobs:
           if [[ -z "$ver"  || "$ver"  == "null" ]]; then echo "::error::metadata.json missing version"; exit 1; fi
           echo "module_name=$name" >> "$GITHUB_OUTPUT"
           echo "version=$ver"      >> "$GITHUB_OUTPUT"
+
+          # The commit the module source is actually at. `git -C` inside a
+          # submodule resolves to that submodule's HEAD, not the catalog's,
+          # so multi-module repos yield one sha shared by their modules
+          # (disambiguated by `{name}`) and `module_path: .` yields the
+          # caller's own HEAD.
+          sha=$(git -C "$mpath" rev-parse HEAD)
+          short_sha="${sha:0:8}"
+          echo "module_sha=$sha" >> "$GITHUB_OUTPUT"
+
+          resolve() {
+            local t="$1"
+            t="${t//\{name\}/$name}"
+            t="${t//\{version\}/$ver}"
+            t="${t//\{short_sha\}/$short_sha}"
+            t="${t//\{sha\}/$sha}"
+            printf '%s' "$t"
+          }
+          rel_tag=$(resolve "${TAG_TEMPLATE}")
+          rel_name=$(resolve "${RELEASE_NAME_TEMPLATE}")
+          if [[ -z "$rel_tag" ]]; then
+            echo "::error::tag_template '${TAG_TEMPLATE}' resolved to an empty tag"; exit 1
+          fi
+          if ! git check-ref-format "refs/tags/$rel_tag"; then
+            echo "::error::tag_template resolved to '$rel_tag', which is not a valid git tag"; exit 1
+          fi
+          [[ -n "$rel_name" ]] || rel_name="$rel_tag"
+          echo "release_tag=$rel_tag"   >> "$GITHUB_OUTPUT"
+          echo "release_name=$rel_name" >> "$GITHUB_OUTPUT"
           # JSON array form for matrix consumption. Drop blank tokens
           # (trailing comma, "a,,b", all-whitespace) so a malformed or
           # empty `variants` input fails here rather than producing a
@@ -253,7 +311,7 @@ jobs:
             echo "already_published=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          tag="${{ steps.meta.outputs.module_name }}-v${{ steps.meta.outputs.version }}"
+          tag="${{ steps.meta.outputs.release_tag }}"
           if rel=$(gh api "repos/${GH_REPO}/releases/tags/${tag}" 2>/dev/null); then
             has_lgx=$(jq '[.assets[]?.name | select(endswith(".lgx"))] | length' <<<"$rel")
             has_side=$(jq '[.assets[]?.name | select(. == "sidecar.json")] | length' <<<"$rel")
@@ -592,7 +650,7 @@ jobs:
           missing_json=$(jq -cn --argjson r "$requested_json" --argjson b "$built_json" '$r - $b')
 
           jq -n \
-             --arg releaseTag "${{ needs.setup.outputs.module_name }}-v${{ needs.setup.outputs.version }}" \
+             --arg releaseTag "${{ needs.setup.outputs.release_tag }}" \
              --arg releasedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
              --arg sha "$sha" --argjson size "$size" \
              --arg rootHash "$mroot" \
@@ -633,8 +691,8 @@ jobs:
       - name: Create / update GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          tag_name: ${{ needs.setup.outputs.module_name }}-v${{ needs.setup.outputs.version }}
-          name:     ${{ needs.setup.outputs.module_name }} v${{ needs.setup.outputs.version }}
+          tag_name: ${{ needs.setup.outputs.release_tag }}
+          name:     ${{ needs.setup.outputs.release_name }}
           body:     ${{ steps.sidecar.outputs.notes }}
           files: |
             ${{ steps.sidecar.outputs.lgx }}
@@ -656,7 +714,7 @@ jobs:
         if: success()
         shell: bash
         env:
-          TAG: ${{ needs.setup.outputs.module_name }}-v${{ needs.setup.outputs.version }}
+          TAG: ${{ needs.setup.outputs.release_tag }}
         run: |
           set -euo pipefail
           current="$(git ls-remote origin "refs/tags/${TAG}" | awk 'NR==1{print $1}')"
@@ -692,7 +750,7 @@ jobs:
     steps:
       - name: Summarise skip
         run: |
-          echo "::notice::Skipped build/release — ${{ needs.setup.outputs.module_name }}-v${{ needs.setup.outputs.version }} is already published. Nudging rebuild-index."
+          echo "::notice::Skipped build/release — ${{ needs.setup.outputs.release_tag }} is already published. Nudging rebuild-index."
       - name: Trigger rebuild-index workflow
         uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0 # v3
         with:

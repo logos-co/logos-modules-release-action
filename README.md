@@ -115,6 +115,35 @@ only rebuilds modules whose version actually moved.
 - Force a rebuild/republish of the same version with
   `skip_if_published: false`.
 
+### Release tag naming (`tag_template`)
+
+By default a release is tagged `<name>-v<version>`, taken from the
+module's `metadata.json`. Two inputs override that:
+
+| Input | Default | Purpose |
+|---|---|---|
+| `tag_template` | `{name}-v{version}` | the git tag |
+| `release_name_template` | `{name} v{version}` | the release title |
+
+Placeholders: `{name}`, `{version}`, `{sha}` (the commit the module
+source is at) and `{short_sha}` (its first 12 characters). `{sha}` is
+resolved inside the module's own repository, so for a submodule it is
+that submodule's HEAD, and the modules of a multi-module repo share one
+sha — `{name}` is what keeps their tags distinct.
+
+Setting `tag_template: "{name}-{short_sha}"` turns the catalog from
+*one release per version* into *one release per module commit*. The
+`skip_if_published` gate follows the tag, so it then means "skip unless
+this commit is new" — which is what a continuous-build catalog wants.
+Note that `version` is still whatever `metadata.json` says and will
+repeat across builds; `index.py` keys entries on `(version, rootHash)`
+and orders same-version entries newest-first, so the tip build stays at
+`versions[0]`.
+
+Publishing per commit makes releases accumulate quickly, and
+`rebuild-index` fetches every published `.lgx` on each run. A catalog
+using this mode should prune old releases.
+
 ### Unpublishing (remove a module or a version)
 
 ```yaml
