@@ -78,6 +78,24 @@ identifier it compares numerically, while `git describe`'s
 `0.2.1-2-gabc`. And a pre-release ranks under its release, so don't mix
 a plain `0.2.1` into the same catalog.
 
+### Building a ref other than the submodule pointer
+
+`module_ref` builds the module at a branch, tag or commit sha in the
+module's own repository, instead of the commit its submodule pointer
+names:
+
+```yaml
+with:
+  module_path: submodules/logos-chat-module
+  module_ref: my-feature-branch
+```
+
+The ref is fetched and checked out detached inside the submodule after
+it is materialised, and before `version_template` is applied — so the
+version reflects the ref that was built. The caller's pointer is not
+moved and nothing is committed, which also means two runs of the same
+branch can produce different packages as it moves.
+
 ### Idempotent releases (skip if already published)
 
 `release.yml` skips the (expensive) Nix build when a release tagged

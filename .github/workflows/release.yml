@@ -26,6 +26,14 @@ on:
         description: "Path to the module source within the caller repo."
         type: string
         default: "."
+      module_ref:
+        description: |
+          Build the module at this ref — a branch, tag or commit sha in
+          the module's OWN repository — instead of the commit its
+          submodule pointer names. Empty (default) uses the pointer.
+          The catalog's pointer is not moved; nothing is committed.
+        type: string
+        default: ""
       version_template:
         description: |
           Rewrite the module's version in metadata.json before it is
@@ -119,6 +127,7 @@ jobs:
           # auth `submodules: recursive` used to propagate for us.
           GH_TOKEN: ${{ github.token }}
           MODULE_PATH: ${{ inputs.module_path }}
+          MODULE_REF: ${{ inputs.module_ref }}
           VERSION_TEMPLATE: ${{ inputs.version_template }}
         run: |
           set -euo pipefail
@@ -142,6 +151,14 @@ jobs:
               if [[ "${MODULE_PATH}/" == "${sub}/"* ]]; then target="${sub}"; break; fi
             done < <(git config --file .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null | awk '{print $2}')
             git submodule update --init --recursive -- "${target}"
+          fi
+          if [[ -n "${MODULE_REF:-}" ]]; then
+            # Not --depth: module flake.nix files use git+file:// inputs
+            # and Nix rejects a shallow flake input.
+            echo "::notice::building ${target} at ${MODULE_REF} instead of its submodule pointer"
+            git -C "${target}" fetch origin "${MODULE_REF}"
+            git -C "${target}" checkout --detach FETCH_HEAD
+            git -C "${target}" submodule update --init --recursive
           fi
           if [[ -n "${VERSION_TEMPLATE:-}" ]]; then
             mpath="${MODULE_PATH:-.}"
@@ -287,6 +304,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MODULE_PATH: ${{ inputs.module_path }}
+          MODULE_REF: ${{ inputs.module_ref }}
           VERSION_TEMPLATE: ${{ inputs.version_template }}
         run: |
           set -euo pipefail
@@ -303,6 +321,14 @@ jobs:
               if [[ "${MODULE_PATH}/" == "${sub}/"* ]]; then target="${sub}"; break; fi
             done < <(git config --file .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null | awk '{print $2}')
             git submodule update --init --recursive -- "${target}"
+          fi
+          if [[ -n "${MODULE_REF:-}" ]]; then
+            # Not --depth: module flake.nix files use git+file:// inputs
+            # and Nix rejects a shallow flake input.
+            echo "::notice::building ${target} at ${MODULE_REF} instead of its submodule pointer"
+            git -C "${target}" fetch origin "${MODULE_REF}"
+            git -C "${target}" checkout --detach FETCH_HEAD
+            git -C "${target}" submodule update --init --recursive
           fi
           if [[ -n "${VERSION_TEMPLATE:-}" ]]; then
             mpath="${MODULE_PATH:-.}"
