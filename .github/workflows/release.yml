@@ -26,6 +26,14 @@ on:
         description: "Path to the module source within the caller repo."
         type: string
         default: "."
+      version_template:
+        description: |
+          Rewrite the module's version in metadata.json before it is
+          built. Placeholders: `{version}`, `{commits}` (commits
+          reachable from the module's HEAD), `{sha}` and `{short_sha}`
+          (8 chars). Empty (default) leaves metadata.json alone.
+        type: string
+        default: ""
       variants:
         description: "Comma-separated list of variants to build."
         type: string
@@ -111,6 +119,7 @@ jobs:
           # auth `submodules: recursive` used to propagate for us.
           GH_TOKEN: ${{ github.token }}
           MODULE_PATH: ${{ inputs.module_path }}
+          VERSION_TEMPLATE: ${{ inputs.version_template }}
         run: |
           set -euo pipefail
           git config --global \
@@ -133,6 +142,22 @@ jobs:
               if [[ "${MODULE_PATH}/" == "${sub}/"* ]]; then target="${sub}"; break; fi
             done < <(git config --file .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null | awk '{print $2}')
             git submodule update --init --recursive -- "${target}"
+          fi
+          if [[ -n "${VERSION_TEMPLATE:-}" ]]; then
+            mpath="${MODULE_PATH:-.}"
+            ver=$(jq -r '.version' "${mpath}/metadata.json")
+            commits=$(git -C "${mpath}" rev-list --count HEAD)
+            sha=$(git -C "${mpath}" rev-parse HEAD)
+            short_sha="${sha:0:8}"
+            t="${VERSION_TEMPLATE}"
+            t="${t//\{version\}/$ver}"
+            t="${t//\{commits\}/$commits}"
+            t="${t//\{short_sha\}/$short_sha}"
+            t="${t//\{sha\}/$sha}"
+            echo "::notice::version ${ver} -> ${t}"
+            tmp=$(mktemp)
+            jq --arg v "${t}" '.version = $v' "${mpath}/metadata.json" > "${tmp}"
+            mv "${tmp}" "${mpath}/metadata.json"
           fi
       - id: meta
         name: Read metadata.json
@@ -262,6 +287,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MODULE_PATH: ${{ inputs.module_path }}
+          VERSION_TEMPLATE: ${{ inputs.version_template }}
         run: |
           set -euo pipefail
           git config --global \
@@ -277,6 +303,22 @@ jobs:
               if [[ "${MODULE_PATH}/" == "${sub}/"* ]]; then target="${sub}"; break; fi
             done < <(git config --file .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null | awk '{print $2}')
             git submodule update --init --recursive -- "${target}"
+          fi
+          if [[ -n "${VERSION_TEMPLATE:-}" ]]; then
+            mpath="${MODULE_PATH:-.}"
+            ver=$(jq -r '.version' "${mpath}/metadata.json")
+            commits=$(git -C "${mpath}" rev-list --count HEAD)
+            sha=$(git -C "${mpath}" rev-parse HEAD)
+            short_sha="${sha:0:8}"
+            t="${VERSION_TEMPLATE}"
+            t="${t//\{version\}/$ver}"
+            t="${t//\{commits\}/$commits}"
+            t="${t//\{short_sha\}/$short_sha}"
+            t="${t//\{sha\}/$sha}"
+            echo "::notice::version ${ver} -> ${t}"
+            tmp=$(mktemp)
+            jq --arg v "${t}" '.version = $v' "${mpath}/metadata.json" > "${tmp}"
+            mv "${tmp}" "${mpath}/metadata.json"
           fi
       # DeterminateSystems' installer rather than cachix/install-nix-action@v25,
       # which trips over the macos-latest runner's pre-provisioned _nixbld*

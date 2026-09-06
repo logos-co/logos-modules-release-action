@@ -52,6 +52,32 @@ jobs:
 Repeat per module. Bumping the submodule pointer (and thereby its
 `metadata.json` `version`) is what triggers a new release.
 
+### Per-commit versions (`version_template`)
+
+`version_template` rewrites the module's version in `metadata.json`
+before it is built, giving a catalog that publishes every commit a
+distinct version per build:
+
+```yaml
+with:
+  version_template: "{version}-{commits}.g{short_sha}"   # 0.2.1-130.g3770771
+```
+
+Placeholders: `{version}`, `{commits}` (commits reachable from the
+module's HEAD), `{sha}`, `{short_sha}`. The rewrite happens in the
+module's checkout in both the setup and build jobs, so the manifest
+cross-check still holds; nothing is committed.
+
+Unique versions make the default `<name>-v<version>` tag unique too, so
+`skip_if_published` becomes "skip unless this commit is new".
+
+Keep the result strict SemVer — `lgx` sorts an unparseable version below
+every parseable one. Note the dot before `{commits}`: as its own numeric
+identifier it compares numerically, while `git describe`'s
+`0.2.1-10-gabc` is one alphanumeric identifier that sorts *below*
+`0.2.1-2-gabc`. And a pre-release ranks under its release, so don't mix
+a plain `0.2.1` into the same catalog.
+
 ### Idempotent releases (skip if already published)
 
 `release.yml` skips the (expensive) Nix build when a release tagged
