@@ -359,6 +359,9 @@ jobs:
         with:
           extra-conf: |
             experimental-features = nix-command flakes
+            extra-substituters = https://cache.nix.logos.co/public https://cache.nix.logos.co/ci
+            extra-trusted-public-keys = public:l4HrXgL4nw246+LBh2SOJyhz64BoGegOYLheT/iIAPU= ci:aVJqjS4NWX5WfqHO0AEhIScjGu/JyK5FoydPrnEbMvc=
+            fallback = true
       - name: Ensure Metal Toolchain
         if: runner.os == 'macOS'
         shell: bash
@@ -431,6 +434,9 @@ jobs:
         with:
           extra-conf: |
             experimental-features = nix-command flakes
+            extra-substituters = https://cache.nix.logos.co/public https://cache.nix.logos.co/ci
+            extra-trusted-public-keys = public:l4HrXgL4nw246+LBh2SOJyhz64BoGegOYLheT/iIAPU= ci:aVJqjS4NWX5WfqHO0AEhIScjGu/JyK5FoydPrnEbMvc=
+            fallback = true
 
       # Bring `lgx` (from logos-co/logos-package) onto PATH so the
       # downstream merge / verify / sign / manifest steps can use a
