@@ -184,6 +184,23 @@ jobs:
           for v in "${V[@]:-}"; do
             t="${v//[[:space:]]/}"
             [[ -z "$t" ]] && continue
+            # Reject anything the build job cannot map to a runner. This
+            # is load-bearing now that `runs-on` is an expression with an
+            # ubuntu-latest fallback: previously an unknown variant left
+            # `matrix.runs-on` unset and the job failed to start, whereas
+            # a fallback would quietly build the runner's own
+            # `.#lgx-portable` — a LINUX package — and upload it under the
+            # bogus variant name. lgpm defines alias fallbacks for the
+            # linux family only, so `windows-amd64` or a typo'd
+            # `darwin-arm64x` would be listed by a catalog and then never
+            # install. Fail at the typo instead.
+            case "$t" in
+              darwin-arm64|linux-amd64|linux-arm64|windows-x86_64) ;;
+              *)
+                echo "::error::unknown variant '$t' (expected one of: darwin-arm64, linux-amd64, linux-arm64, windows-x86_64)"
+                exit 1
+                ;;
+            esac
             arr+="\"$t\","
           done
           arr="${arr%,}]"
@@ -242,20 +259,43 @@ jobs:
       fail-fast: false
       matrix:
         variant: ${{ fromJson(needs.setup.outputs.variants) }}
-        include:
-          - variant: darwin-arm64
-            runs-on: macos-latest          # Apple silicon
-          - variant: linux-amd64
-            runs-on: ubuntu-latest         # x86_64
-          - variant: linux-arm64
-            runs-on: ubuntu-24.04-arm      # Public GitHub arm64 runner (GA'd 2025)
-          # Not a Windows runner: the mingw cross derivation's `system`
-          # is its BUILD platform, and logos-module-builder pins that to
-          # x86_64-linux. So this leg is an ordinary Linux job that
-          # builds a PE — see the variant→attribute map in the build step.
-          - variant: windows-x86_64
-            runs-on: ubuntu-latest
-    runs-on: ${{ matrix.runs-on }}
+    # Variant -> runner as an EXPRESSION, not a matrix `include:` list.
+    #
+    # `include:` cannot express this mapping safely. Per the documented
+    # rule, an include object whose key:value pairs cannot be added to a
+    # combination without overwriting an original matrix value CREATES A
+    # NEW COMBINATION instead. `variant` is the original matrix key, so
+    # every include entry naming a variant that is not in the resolved
+    # list is not a lookup miss — it is an extra job:
+    #
+    #   * with the default variants, `- variant: windows-x86_64` matches
+    #     nothing and appends a 4th, uninvited windows-x86_64 job to EVERY
+    #     caller. Modules whose flake exposes no packages.x86_64-windows
+    #     (i.e. every module that has not opted in) fail that leg and
+    #     publish a partial release.
+    #   * symmetrically, a caller narrowing `variants:` to "linux-amd64"
+    #     gets phantom darwin-arm64 and linux-arm64 jobs from the two
+    #     unmatched native entries.
+    #
+    # The second half has been latent since `include:` was introduced; the
+    # windows entry is what made it bite by default.
+    #
+    # windows-x86_64 maps to a LINUX runner deliberately: the mingw cross
+    # derivation's `system` is its BUILD platform, which logos-module-builder
+    # pins to x86_64-linux. That leg is an ordinary Linux job producing a
+    # PE — see the variant->attribute map in the build step.
+    #
+    # An unrecognised variant falls through to ubuntu-latest here, which is
+    # why the setup job rejects unknown variant strings outright.
+    #
+    # NB: the continuation lines below MUST keep the indentation of the
+    # first. A more-indented line in a `>-` folded scalar is preserved
+    # verbatim, newline included, which would embed a literal newline
+    # inside the ${{ }} expression.
+    runs-on: >-
+      ${{ matrix.variant == 'darwin-arm64' && 'macos-latest'
+      || matrix.variant == 'linux-arm64' && 'ubuntu-24.04-arm'
+      || 'ubuntu-latest' }}
     steps:
       # Same full-clone + single-submodule rationale as the setup job:
       # Nix flake inputs that reference the local working tree refuse a
