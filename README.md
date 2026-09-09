@@ -13,7 +13,7 @@ For each module in your repo, the `release.yml` workflow:
 
 1. Reads `metadata.json` to pick up `name` and `version`.
 2. Builds the module's `.lgx` on a per-variant matrix (Linux + macOS by
-   default).
+   default; Windows opt-in — see [Variants](#variants)).
 3. Merges the per-variant artifacts into a single multi-variant `.lgx`
    (via `lgx merge`).
 4. `lgx verify` — fails the run if the package is invalid.
@@ -51,6 +51,36 @@ jobs:
 
 Repeat per module. Bumping the submodule pointer (and thereby its
 `metadata.json` `version`) is what triggers a new release.
+
+### Variants
+
+| Variant | Runner | Flake attribute |
+| ------- | ------ | --------------- |
+| `darwin-arm64` | `macos-latest` | `.#lgx-portable` |
+| `linux-amd64` | `ubuntu-latest` | `.#lgx-portable` |
+| `linux-arm64` | `ubuntu-24.04-arm` | `.#lgx-portable` |
+| `windows-x86_64` | `ubuntu-latest` | `.#packages.x86_64-windows.lgx-portable` |
+
+The first three are the default. Windows is opt-in because it is a mingw
+**cross** build rather than a native one — the derivation's build platform
+is `x86_64-linux`, so an ordinary Linux runner produces the PE, and only a
+module whose flake exposes `packages.x86_64-windows` has anything to build:
+
+```yaml
+    with:
+      module_path: submodules/logos-chat-module
+      variants: "darwin-arm64,linux-amd64,linux-arm64,windows-x86_64"
+```
+
+These spellings are a contract, not a convention: `lgpm` computes the
+running platform's variant string itself (`windows-x86_64`, not
+`windows-amd64`) and has no alias fallback, so a mismatch reads to users as
+"Not Available" rather than as an error.
+
+The matrix is `fail-fast: false` and the release step merges whatever
+succeeded, so requesting a variant a module cannot build costs you a red leg
+and a partial release, not the whole module. Which variants made it is
+recorded in the sidecar as `builtVariants` / `missingVariants`.
 
 ### Idempotent releases (skip if already published)
 
