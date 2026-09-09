@@ -27,12 +27,15 @@ on:
         type: string
         default: "."
       variants:
-        description: "Comma-separated list of variants to build."
+        description: |
+          Comma-separated list of variants to build. Supported:
+          darwin-arm64, linux-amd64, linux-arm64, windows-x86_64.
         type: string
-        # darwin-arm64 + linux-amd64 + linux-arm64 covers every GitHub-
-        # hosted runner family currently available for public repos.
-        # macOS Intel and Windows are not in the default set — callers
-        # that need them can pass an explicit `variants:` list.
+        # The three native variants cover every GitHub-hosted runner
+        # family available for public repos. windows-x86_64 is a mingw
+        # CROSS build, so it is opt-in: only a module whose flake exposes
+        # packages.x86_64-windows has anything to build there. macOS Intel
+        # has no runner family at all.
         default: "darwin-arm64,linux-amd64,linux-arm64"
       signing_mode:
         description: "One of: none, inline, external."
@@ -246,6 +249,12 @@ jobs:
             runs-on: ubuntu-latest         # x86_64
           - variant: linux-arm64
             runs-on: ubuntu-24.04-arm      # Public GitHub arm64 runner (GA'd 2025)
+          # Not a Windows runner: the mingw cross derivation's `system`
+          # is its BUILD platform, and logos-module-builder pins that to
+          # x86_64-linux. So this leg is an ordinary Linux job that
+          # builds a PE — see the variant→attribute map in the build step.
+          - variant: windows-x86_64
+            runs-on: ubuntu-latest
     runs-on: ${{ matrix.runs-on }}
     steps:
       # Same full-clone + single-submodule rationale as the setup job:
@@ -308,15 +317,23 @@ jobs:
         run: |
           set -euo pipefail
           cd "${{ inputs.module_path }}"
-          # Build the PORTABLE bundle (`.#lgx-portable`), not the dev one
-          # (`.#lgx`). The dev bundle uses /nix/store paths and tags
+          # Native variants build the runner's own `packages.<system>`.
+          # windows-x86_64 is a cross target: its bundle lives at the
+          # PSEUDO-system attr `packages.x86_64-windows`, which this Linux
+          # runner realises. A module lacking it fails this leg alone.
+          case "${{ matrix.variant }}" in
+            windows-x86_64) attr=".#packages.x86_64-windows.lgx-portable" ;;
+            *)              attr=".#lgx-portable" ;;
+          esac
+          # Build the PORTABLE bundle (`lgx-portable`), not the dev one
+          # (`lgx`). The dev bundle uses /nix/store paths and tags
           # variants with a "-dev" suffix (e.g. linux-amd64-dev). End
           # users running a non-dev basecamp have validVariants without
           # that suffix, so dev-tagged variants get rejected by the UI
           # as "Not Available" / BuildFlavorMismatch. The portable
           # bundle is self-contained and uses the canonical variant
           # names that match what the package manager expects.
-          nix build .#lgx-portable --print-out-paths --no-link > .lgx-out
+          nix build "$attr" --print-out-paths --no-link > .lgx-out
           # The lgx build output is a single .lgx file in the result dir.
           out=$(cat .lgx-out)
           lgx=$(find "$out" -maxdepth 2 -name '*.lgx' | head -n1)
