@@ -54,8 +54,8 @@ Repeat per module. Bumping the submodule pointer (and thereby its
 
 ### Variants
 
-| Variant | Runner | Flake attribute |
-| ------- | ------ | --------------- |
+| Variant | Default runner | Flake attribute |
+| ------- | -------------- | --------------- |
 | `darwin-arm64` | `macos-latest` | `.#lgx-portable` |
 | `linux-amd64` | `ubuntu-latest` | `.#lgx-portable` |
 | `linux-arm64` | `ubuntu-24.04-arm` | `.#lgx-portable` |
@@ -81,6 +81,64 @@ The matrix is `fail-fast: false` and the release step merges whatever
 succeeded, so requesting a variant a module cannot build costs you a red leg
 and a partial release, not the whole module. Which variants made it is
 recorded in the sidecar as `builtVariants` / `missingVariants`.
+
+### Runners
+
+Every job runs on a GitHub-hosted runner unless you say otherwise:
+
+| Input | Applies to | Value |
+| ----- | ---------- | ----- |
+| `build_runners` | the build legs | JSON object: variant → label, or array of labels |
+| `runner` | every other job (setup, release, index, unpublish) | a label, or a JSON array of labels |
+
+```yaml
+    with:
+      build_runners: >-
+        {"linux-amd64": ["self-hosted", "Linux", "X64"],
+        "darwin-arm64": ["self-hosted", "macOS", "ARM64"]}
+```
+
+A variant missing from `build_runners` keeps its runner from the table
+above. The exception is `windows-x86_64`, which uses the `linux-amd64`
+entry when it has none of its own, because it is a Linux job. Unknown
+variant keys fail the run.
+
+`rebuild-index.yml` and `unpublish.yml` take `runner` as well. A
+self-hosted build runner needs `git` and `bash`; Nix is installed only
+where it is missing. A self-hosted `runner` also needs `jq`, `gh` and
+`python3`, plus `docker` if you use `signing_command_image`.
+
+### Nix cache
+
+Nix comes from
+[`logos-co/setup-nix-cache-action`](https://github.com/logos-co/setup-nix-cache-action),
+so every job reads the Logos Attic caches (`cache.nix.logos.co`). They are
+public, so this needs no credentials and works in any fork. The build legs
+also push what they build when the caller provides a token:
+
+| Ref | Cache | Token |
+| --- | ----- | ----- |
+| `main` / `master` | `public` | `ATTIC_TOKEN_PUBLIC` |
+| any other | `ci` | `ATTIC_TOKEN_CI` |
+
+Logos keeps `ATTIC_TOKEN_PUBLIC` in each repo's `public-cache`
+environment. A caller can't pass an environment secret's value, so name the
+environment with `cache_environment`. The build legs then enter it on
+`main`/`master`. Still pass `ATTIC_TOKEN_PUBLIC`, even though it is empty
+where you call from: a called job only gets an environment secret whose
+name its caller passed.
+
+```yaml
+    with:
+      cache_environment: public-cache
+    secrets:
+      ATTIC_TOKEN_CI: ${{ secrets.ATTIC_TOKEN_CI }}
+      ATTIC_TOKEN_PUBLIC: ${{ secrets.ATTIC_TOKEN_PUBLIC }}
+```
+
+Without the tokens the cache is only read, which is the right setup for
+everyone outside Logos. Leave `cache_environment` blank there: GitHub creates
+any environment a job names that doesn't exist yet.
 
 ### Idempotent releases (skip if already published)
 

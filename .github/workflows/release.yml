@@ -70,15 +70,48 @@ on:
           re-pointed at the commit that rebuilt them.
         type: boolean
         default: true
+      runner:
+        description: |
+          Runner for every job except the build legs: a label, or a JSON
+          array of labels. Blank means ubuntu-latest.
+        type: string
+        default: ""
+      build_runners:
+        description: |
+          JSON object mapping a variant to the runner that builds it (a
+          label or an array of labels), e.g.
+          {"darwin-arm64": ["self-hosted", "macOS", "ARM64"]}.
+          A variant left out keeps its GitHub-hosted runner, except
+          windows-x86_64, which follows the linux-amd64 entry if there is one.
+        type: string
+        default: ""
+      cache_environment:
+        description: |
+          Environment holding ATTIC_TOKEN_PUBLIC. The build legs enter it on
+          main/master, since a caller can't pass an environment secret's
+          value; it must still pass the secret's name. Blank never enters one.
+        type: string
+        default: ""
     secrets:
       signing_key:
         description: |
           JWK-format Ed25519 secret key. Required iff signing_mode == inline.
         required: false
+      ATTIC_TOKEN_CI:
+        description: |
+          Push token for the Logos `ci` Attic cache, used on every ref but
+          main/master. Without it that cache is only read.
+        required: false
+      ATTIC_TOKEN_PUBLIC:
+        description: |
+          Push token for the Logos `public` Attic cache, used on main/master.
+          With cache_environment, pass it anyway (empty at the caller): the
+          environment supplies the value, but only for a name passed in.
+        required: false
 
 jobs:
   setup:
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner || 'ubuntu-latest' }}
     # Reading the caller's releases (public repos need no auth, but be
     # explicit so private catalogs work too).
     permissions:
@@ -116,9 +149,12 @@ jobs:
           MODULE_PATH: ${{ inputs.module_path }}
         run: |
           set -euo pipefail
-          git config --global \
-            url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf \
-            "https://github.com/"
+          # Scoped to this step, not `git config --global`: a self-hosted
+          # runner keeps its home, and git uses the first (expired) rewrite.
+          n="${GIT_CONFIG_COUNT:-0}"
+          export GIT_CONFIG_COUNT=$((n + 1))
+          export "GIT_CONFIG_KEY_${n}=url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf"
+          export "GIT_CONFIG_VALUE_${n}=https://github.com/"
           if [[ -z "${MODULE_PATH:-}" || "${MODULE_PATH}" == "." ]]; then
             # The caller repo IS the module (module_path defaults to "."):
             # materialise its own (nested) submodules, as before.
@@ -140,10 +176,32 @@ jobs:
       - id: meta
         name: Read metadata.json
         shell: bash
+        env:
+          BUILD_RUNNERS: ${{ inputs.build_runners }}
         run: |
           set -euo pipefail
 
           # ── Fail fast on invalid inputs ──────────────────────────────
+          # A mistyped build_runners key would silently leave that variant
+          # on its GitHub-hosted runner; bad JSON would fail the build legs
+          # with an opaque expression error.
+          if [[ -n "${BUILD_RUNNERS}" ]]; then
+            verdict=$(jq -rs --argjson known '["darwin-arm64","linux-amd64","linux-arm64","windows-x86_64"]' '
+              if length != 1 or (.[0] | type) != "object" then "must be one JSON object"
+              else .[0]
+              | (keys - $known) as $unknown
+              | if ($unknown | length) > 0 then "names unknown variant(s): \($unknown | join(", "))"
+                elif any(.[]; ((type == "string" and length > 0)
+                               or (type == "array" and length > 0 and all(.[]; type == "string" and length > 0))) | not)
+                then "must map each variant to a label or a non-empty array of labels"
+                else "ok" end
+              end' <<<"${BUILD_RUNNERS}" 2>/dev/null) || verdict="must be valid JSON"
+            if [[ "${verdict}" != "ok" ]]; then
+              echo "::error::build_runners ${verdict}"
+              exit 1
+            fi
+          fi
+
           # Without this an unrecognised signing_mode (e.g. "Inline",
           # "sign") silently produces an UNSIGNED release — both the
           # inline and external steps are `if:`-gated on exact strings,
@@ -288,14 +346,22 @@ jobs:
     # An unrecognised variant falls through to ubuntu-latest here, which is
     # why the setup job rejects unknown variant strings outright.
     #
+    # A `build_runners` entry for the variant wins over all of the above;
+    # windows-x86_64 falls back to the linux-amd64 entry, being a Linux job.
+    #
     # NB: the continuation lines below MUST keep the indentation of the
     # first. A more-indented line in a `>-` folded scalar is preserved
     # verbatim, newline included, which would embed a literal newline
     # inside the ${{ }} expression.
     runs-on: >-
-      ${{ matrix.variant == 'darwin-arm64' && 'macos-latest'
+      ${{ fromJSON(inputs.build_runners || '{}')[matrix.variant]
+      || matrix.variant == 'windows-x86_64' && fromJSON(inputs.build_runners || '{}')['linux-amd64']
+      || matrix.variant == 'darwin-arm64' && 'macos-latest'
       || matrix.variant == 'linux-arm64' && 'ubuntu-24.04-arm'
       || 'ubuntu-latest' }}
+    # ATTIC_TOKEN_PUBLIC is an environment secret, whose value a caller can't
+    # pass, so the leg enters the environment itself (main/master only).
+    environment: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && inputs.cache_environment || '' }}
     steps:
       # Same full-clone + single-submodule rationale as the setup job:
       # Nix flake inputs that reference the local working tree refuse a
@@ -313,9 +379,11 @@ jobs:
           MODULE_PATH: ${{ inputs.module_path }}
         run: |
           set -euo pipefail
-          git config --global \
-            url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf \
-            "https://github.com/"
+          # Step-scoped token rewrite — see the setup job.
+          n="${GIT_CONFIG_COUNT:-0}"
+          export GIT_CONFIG_COUNT=$((n + 1))
+          export "GIT_CONFIG_KEY_${n}=url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf"
+          export "GIT_CONFIG_VALUE_${n}=https://github.com/"
           if [[ -z "${MODULE_PATH:-}" || "${MODULE_PATH}" == "." ]]; then
             git submodule update --init --recursive
           else
@@ -327,19 +395,13 @@ jobs:
             done < <(git config --file .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null | awk '{print $2}')
             git submodule update --init --recursive -- "${target}"
           fi
-      # DeterminateSystems' installer rather than cachix/install-nix-action@v25,
-      # which trips over the macos-latest runner's pre-provisioned _nixbld*
-      # users (`<dscl_cmd> DS Error: -14135 (eDSRecordAlreadyExists)`).
-      # DS detects pre-existing Nix installs and skips the user-creation
-      # step gracefully on all current GitHub runners (Apple silicon
-      # macOS, ubuntu-latest, ubuntu-24.04-arm).
-      # Pinned to an immutable release SHA (was @main — a moving ref, a
-      # supply-chain + reproducibility risk). Bump deliberately; CI's
-      # actionlint + Dependabot (.github/dependabot.yml) surface updates.
-      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      # Installs Nix reading the Logos Attic caches (a runner with Nix
+      # preinstalled keeps its own config), and pushes this leg's builds
+      # when the ref's token is set. Without a token it only reads.
+      - uses: logos-co/setup-nix-cache-action@781f072122f4df6af0e33a7d355ebd20283e019e # v1.2.0
         with:
-          extra-conf: |
-            experimental-features = nix-command flakes
+          attic-token-ci: ${{ secrets.ATTIC_TOKEN_CI }}
+          attic-token-public: ${{ secrets.ATTIC_TOKEN_PUBLIC }}
       - name: Ensure Metal Toolchain
         if: runner.os == 'macOS'
         shell: bash
@@ -406,20 +468,13 @@ jobs:
       always()
       && needs.setup.result == 'success'
       && needs.setup.outputs.already_published != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner || 'ubuntu-latest' }}
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      # Same DeterminateSystems-installer rationale as the build job —
-      # avoids the macOS runner's eDSRecordAlreadyExists issue.
-      # Pinned to an immutable release SHA (was @main — a moving ref, a
-      # supply-chain + reproducibility risk). Bump deliberately; CI's
-      # actionlint + Dependabot (.github/dependabot.yml) surface updates.
-      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-        with:
-          extra-conf: |
-            experimental-features = nix-command flakes
+      # Read-only: this job only builds the lgx CLI, so it gets no tokens.
+      - uses: logos-co/setup-nix-cache-action@781f072122f4df6af0e33a7d355ebd20283e019e # v1.2.0
 
       # Bring `lgx` (from logos-co/logos-package) onto PATH so the
       # downstream merge / verify / sign / manifest steps can use a
@@ -675,7 +730,7 @@ jobs:
   already-published:
     needs: setup
     if: needs.setup.outputs.already_published == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner || 'ubuntu-latest' }}
     permissions:
       contents: write
     steps:
