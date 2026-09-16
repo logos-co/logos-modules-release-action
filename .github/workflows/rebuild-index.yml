@@ -16,6 +16,13 @@ name: Rebuild index.json
 
 on:
   workflow_call:
+    inputs:
+      runner:
+        description: |
+          Runner for the rebuild: a label, or a JSON array of labels.
+          Blank means ubuntu-latest.
+        type: string
+        default: ""
   workflow_dispatch:
   repository_dispatch:
     types: [rebuild-index]
@@ -37,7 +44,7 @@ concurrency:
 
 jobs:
   rebuild:
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner || 'ubuntu-latest' }}
     permissions:
       contents: write
     steps:
@@ -52,13 +59,9 @@ jobs:
 
       # Bring `lgx` onto PATH. `index.py` requires it for the
       # verify/manifest/signature reads it does per package. Same
-      # install pattern release.yml uses (DeterminateSystems' Nix
-      # installer pinned to an immutable SHA, then a single
-      # `nix build` against the package flake).
-      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-        with:
-          extra-conf: |
-            experimental-features = nix-command flakes
+      # install pattern as release.yml's release job: Nix reading the
+      # Logos cache (no tokens), then one `nix build` of the package flake.
+      - uses: logos-co/setup-nix-cache-action@781f072122f4df6af0e33a7d355ebd20283e019e # v1.2.0
       - name: Set up lgx CLI
         shell: bash
         run: |
