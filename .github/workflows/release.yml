@@ -563,10 +563,12 @@ jobs:
           fi
           sha=$(sha256sum "$lgx" | awk '{print $1}')
           size=$(stat -c%s "$lgx" 2>/dev/null || stat -f%z "$lgx")
-          sig=""
-          if unzip -p "$lgx" manifest.sig 2>/dev/null | head -c1 >/dev/null; then
-            # `.lgx` is gzip-tar, not zip; use tar to peek instead.
-            sig=$(tar -O -xzf "$lgx" manifest.sig 2>/dev/null || true)
+          # Read .lgx only via lgx, never tar/unzip; unsigned prints nothing (exit 0).
+          # The fromjson below must only ever see "" or a single JSON object.
+          sig=$(lgx signature "$lgx")
+          if [[ -n "$sig" ]] && ! jq -en --arg s "$sig" '$s | fromjson | type == "object"' >/dev/null 2>&1; then
+            echo "::error::manifest.sig in $lgx is not a JSON object"
+            exit 1
           fi
           # Partial-variant visibility: which variants were requested
           # (setup output) vs actually built (merge output). The build

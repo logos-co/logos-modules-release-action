@@ -18,10 +18,10 @@ For each module in your repo, the `release.yml` workflow:
    (via `lgx merge`).
 4. `lgx verify` — fails the run if the package is invalid.
 5. **Optional signing** (see [Signing](#signing) below).
-6. `lgx manifest --json` to extract the embedded manifest, then build a
-   sidecar JSON capturing `releasedAt`, `publisherRef`, `sha256`,
-   `rootHash`, the full manifest, and (when signed) the embedded
-   `manifest.sig`.
+6. `lgx manifest --json` and `lgx signature` to extract the embedded
+   manifest and signature, then build a sidecar JSON capturing
+   `releasedAt`, `publisherRef`, `sha256`, `rootHash`, the full
+   manifest, and (when signed) the embedded `manifest.sig`.
 7. Publishes a per-module GitHub release tagged `<module>-v<version>`
    with the `.lgx` and the sidecar attached.
 8. Dispatches `rebuild-index`, which:
