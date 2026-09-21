@@ -33,6 +33,10 @@ on:
         description: "List what would be deleted and stop (no deletion, no rebuild)."
         type: boolean
         default: false
+      runner:
+        description: "Runner for the job: a label, or a JSON array of labels. Blank means ubuntu-latest."
+        type: string
+        default: ""
     secrets:
       storage_nodes:
         description: |
@@ -69,7 +73,7 @@ permissions:
 
 jobs:
   unpublish:
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner || 'ubuntu-latest' }}
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
