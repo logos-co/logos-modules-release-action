@@ -521,14 +521,14 @@ jobs:
                               --data-binary @"$LGX_PATH" \
                               "$endpoint/api/storage/v1/data" 2>&1); then
                 # Syntax to display a warning on GitHub Actions
-                echo "::warning::$network: $endpoint refused the upload: $got"
+                echo "::warning::$network: a storage node refused the upload: $got"
                 continue
               fi
 
               if [[ -z "$cid" ]]; then
                 cid="$got"
               elif [[ "$got" != "$cid" ]]; then
-                echo "::error::$endpoint answered $got but another node answered $cid, the CID should be the same across the networks."
+                echo "::error::A $network storage node answered $got but another node answered $cid, the CID should be the same across the networks."
                 exit 1
               fi
 

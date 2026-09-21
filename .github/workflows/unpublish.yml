@@ -163,9 +163,9 @@ jobs:
 
             for endpoint in $endpoints; do
               if curl --fail-with-body -sS -X DELETE "$endpoint/api/storage/v1/data/$cid"; then
-                echo "==> $tag: deleted $cid from $endpoint"
+                echo "==> $tag: deleted $cid from a storage node"
               else
-                echo "::warning::$tag: $endpoint refused to delete $cid"
+                echo "::warning::$tag: a storage node refused to delete $cid"
               fi
             done
           done
