@@ -85,7 +85,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: logos-co/logos-modules-release-tool
-          ref: c52e92765b40b983cd9c573f8d087eac6b0a9404
+          ref: c686a83a6a02888c7e59713bcd20f55f5f1c392d
           path: _tool
 
       # Collect every published `.lgx` URL from the caller's releases.
@@ -100,8 +100,8 @@ jobs:
       # identical urls.txt.
       #
       # Expected output, one line per package:
-      #   logos:<cid> https://github.com/<repo>/releases/download/<tag>/<package>-<version>.lgx
-      # or, when the release has no CID:
+      #   logos:<network>:<cid> ... https://github.com/<repo>/releases/download/<tag>/<package>-<version>.lgx
+      # with one logos: source per network, or, when the release has no CID:
       #   https://github.com/<repo>/releases/download/<tag>/<package>-<version>.lgx
       - name: Collect `.lgx` URLs from this repo's releases
         env:
@@ -125,13 +125,17 @@ jobs:
           while read -r lgx_url; do
             sidecar_url="${lgx_url%/*}/sidecar.json"
 
-            if ! cid=$(curl -fsSL "$sidecar_url" | jq -r '.cid // empty'); then
+            if ! sidecar=$(curl -fsSL "$sidecar_url"); then
               echo "::warning::cannot read $sidecar_url, listing $lgx_url without a CID"
-              cid=""
+              sidecar=""
             fi
 
-            if [[ -n "$cid" ]]; then
-              echo -n "logos:$cid " >> urls.txt
+            if [[ -n "$sidecar" ]]; then
+              cid=$(jq -r '.cid' <<<"$sidecar")
+
+              for network in $(jq -r '.networks // [] | .[]' <<<"$sidecar"); do
+                echo -n "logos:$network:$cid " >> urls.txt
+              done
             fi
 
             echo "$lgx_url" >> urls.txt

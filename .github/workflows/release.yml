@@ -670,6 +670,7 @@ jobs:
           done
 
           echo "cid=$cid" >> "$GITHUB_OUTPUT"
+          echo "networks=$(jq -c 'keys' <<<"$STORAGE_NODES")" >> "$GITHUB_OUTPUT"
 
       - name: Extract manifest & build sidecar JSON
         id: sidecar
@@ -714,6 +715,7 @@ jobs:
              --argjson manifest "$manifest" \
              --arg signature "$sig" \
              --arg cid "${{ steps.seed.outputs.cid }}" \
+             --argjson networks '${{ steps.seed.outputs.networks || '[]' }}' \
              --argjson builtVariants "$built_json" \
              --argjson missingVariants "$missing_json" \
              '{
@@ -729,7 +731,7 @@ jobs:
                    then { signature: ($signature | fromjson) }
                    else {} end)
                 + (if ($cid | length) > 0
-                   then { cid: $cid }
+                   then { cid: $cid, networks: $networks }
                    else {} end)' > sidecar.json
           echo "lgx=$lgx" >> "$GITHUB_OUTPUT"
           echo "sidecar=$PWD/sidecar.json" >> "$GITHUB_OUTPUT"
