@@ -124,7 +124,11 @@ jobs:
           # the CID is available.
           while read -r lgx_url; do
             sidecar_url="${lgx_url%/*}/sidecar.json"
-            cid=$(curl -fsSL "$sidecar_url" | jq -r '.cid // empty')
+
+            if ! cid=$(curl -fsSL "$sidecar_url" | jq -r '.cid // empty'); then
+              echo "::warning::cannot read $sidecar_url, listing $lgx_url without a CID"
+              cid=""
+            fi
 
             if [[ -n "$cid" ]]; then
               echo -n "logos:$cid " >> urls.txt
