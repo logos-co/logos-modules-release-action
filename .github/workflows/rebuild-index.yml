@@ -85,7 +85,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: logos-co/logos-modules-release-tool
-          ref: 725b14cf83d7a2d538547668c141ee01cbc29ce7
+          ref: c52e92765b40b983cd9c573f8d087eac6b0a9404
           path: _tool
 
       # Collect every published `.lgx` URL from the caller's releases.
@@ -98,6 +98,11 @@ jobs:
       # (relies only on draft + tag_name + browser_download_url), so
       # a fresh rebuild over an unchanged release set produces an
       # identical urls.txt.
+      #
+      # Expected output, one line per package:
+      #   logos:<cid> https://github.com/<repo>/releases/download/<tag>/<package>-<version>.lgx
+      # or, when the release has no CID:
+      #   https://github.com/<repo>/releases/download/<tag>/<package>-<version>.lgx
       - name: Collect `.lgx` URLs from this repo's releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -113,7 +118,21 @@ jobs:
               | .assets[]?
               | select(.name | endswith(".lgx"))
               | .browser_download_url
-            ' > urls.txt
+            ' > lgx.txt
+
+          # Loop over the Github assets to add the Storage link when
+          # the CID is available.
+          while read -r lgx_url; do
+            sidecar_url="${lgx_url%/*}/sidecar.json"
+            cid=$(curl -fsSL "$sidecar_url" | jq -r '.cid // empty')
+
+            if [[ -n "$cid" ]]; then
+              echo -n "logos:$cid " >> urls.txt
+            fi
+
+            echo "$lgx_url" >> urls.txt
+          done < lgx.txt
+
           echo "::notice::collected $(wc -l < urls.txt) .lgx URL(s) from releases"
 
       - name: Build index.json
