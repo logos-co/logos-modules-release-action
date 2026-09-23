@@ -94,10 +94,22 @@ jobs:
       # mustn't advertise an unpublished version).
       #
       # `--paginate` walks every page; `gh api` honours $GH_TOKEN
-      # automatically. The jq filter is byte-stable across re-runs
-      # (relies only on draft + tag_name + browser_download_url), so
-      # a fresh rebuild over an unchanged release set produces an
-      # identical urls.txt.
+      # automatically.
+      #
+      # Assets are read per release from `/releases/{id}/assets`, NOT
+      # from the inline `assets` array of the list endpoint. GitHub
+      # serves that inline array inconsistently for recently published
+      # releases (empty on most requests, populated on a few, for
+      # tens of minutes and across delete/re-create), which silently
+      # dropped new versions from the catalog. The per-release endpoint
+      # is consistent. It also returns stubs of failed uploads (state
+      # "starter"), which the inline array hides, so filter on
+      # state == "uploaded" or `index.py build` would 404 on them.
+      #
+      # The filters are byte-stable across re-runs (they rely only on
+      # draft + tag_name + state + name + browser_download_url, in list
+      # order), so a fresh rebuild over an unchanged release set
+      # produces an identical urls.txt.
       #
       # Expected output, one line per package:
       #   logos:<network>:<cid> ... https://github.com/<repo>/releases/download/<tag>/<package>-<version>.lgx
@@ -109,16 +121,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          : > lgx.txt
           gh api \
             "repos/${{ github.repository }}/releases" --paginate \
             --jq '
               .[]
               | select(.draft != true)
               | select(.tag_name != "index")
-              | .assets[]?
-              | select(.name | endswith(".lgx"))
-              | .browser_download_url
-            ' > lgx.txt
+              | .id
+            ' |
+          while read -r release_id; do
+            gh api \
+              "repos/${{ github.repository }}/releases/${release_id}/assets" --paginate \
+              --jq '
+                .[]
+                | select(.state == "uploaded")
+                | select(.name | endswith(".lgx"))
+                | .browser_download_url
+              ' >> lgx.txt
+          done
 
           # Loop over the Github assets to add the Storage link when
           # the CID is available.
