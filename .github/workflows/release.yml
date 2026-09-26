@@ -29,13 +29,17 @@ on:
       variants:
         description: |
           Comma-separated list of variants to build. Supported:
-          darwin-arm64, linux-amd64, linux-arm64, windows-x86_64.
+          darwin-arm64, darwin-x86_64, linux-amd64, linux-arm64,
+          windows-x86_64.
         type: string
-        # The three native variants cover every GitHub-hosted runner
-        # family available for public repos. windows-x86_64 is a mingw
-        # CROSS build, so it is opt-in: only a module whose flake exposes
-        # packages.x86_64-windows has anything to build there. macOS Intel
-        # has no runner family at all.
+        # The three native variants cover the runner families every
+        # module can rely on. windows-x86_64 is a mingw CROSS build, so
+        # it is opt-in: only a module whose flake exposes
+        # packages.x86_64-windows has anything to build there.
+        # darwin-x86_64 is opt-in too: it is a NATIVE build, but the only
+        # Intel runner GitHub hosts is `macos-15-intel`, kept for legacy
+        # builds — modules that have dropped x86_64-darwin outputs must
+        # not be handed a leg that cannot succeed.
         default: "darwin-arm64,linux-amd64,linux-arm64"
       signing_mode:
         description: "One of: none, inline, external."
@@ -196,7 +200,7 @@ jobs:
           # on its GitHub-hosted runner; bad JSON would fail the build legs
           # with an opaque expression error.
           if [[ -n "${BUILD_RUNNERS}" ]]; then
-            verdict=$(jq -rs --argjson known '["darwin-arm64","linux-amd64","linux-arm64","windows-x86_64"]' '
+            verdict=$(jq -rs --argjson known '["darwin-arm64","darwin-x86_64","linux-amd64","linux-arm64","windows-x86_64"]' '
               if length != 1 or (.[0] | type) != "object" then "must be one JSON object"
               else .[0]
               | (keys - $known) as $unknown
@@ -263,9 +267,9 @@ jobs:
             # `darwin-arm64x` would be listed by a catalog and then never
             # install. Fail at the typo instead.
             case "$t" in
-              darwin-arm64|linux-amd64|linux-arm64|windows-x86_64) ;;
+              darwin-arm64|darwin-x86_64|linux-amd64|linux-arm64|windows-x86_64) ;;
               *)
-                echo "::error::unknown variant '$t' (expected one of: darwin-arm64, linux-amd64, linux-arm64, windows-x86_64)"
+                echo "::error::unknown variant '$t' (expected one of: darwin-arm64, darwin-x86_64, linux-amd64, linux-arm64, windows-x86_64)"
                 exit 1
                 ;;
             esac
@@ -367,6 +371,7 @@ jobs:
       ${{ fromJSON(inputs.build_runners || '{}')[matrix.variant]
       || matrix.variant == 'windows-x86_64' && fromJSON(inputs.build_runners || '{}')['linux-amd64']
       || matrix.variant == 'darwin-arm64' && 'macos-latest'
+      || matrix.variant == 'darwin-x86_64' && 'macos-15-intel'
       || matrix.variant == 'linux-arm64' && 'ubuntu-24.04-arm'
       || 'ubuntu-latest' }}
     # ATTIC_TOKEN_PUBLIC is an environment secret, whose value a caller can't
