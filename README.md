@@ -57,14 +57,19 @@ Repeat per module. Bumping the submodule pointer (and thereby its
 | Variant | Default runner | Flake attribute |
 | ------- | -------------- | --------------- |
 | `darwin-arm64` | `macos-latest` | `.#lgx-portable` |
+| `darwin-x86_64` | `macos-15-intel` | `.#lgx-portable` |
 | `linux-amd64` | `ubuntu-latest` | `.#lgx-portable` |
 | `linux-arm64` | `ubuntu-24.04-arm` | `.#lgx-portable` |
 | `windows-x86_64` | `ubuntu-latest` | `.#packages.x86_64-windows.lgx-portable` |
 
-The first three are the default. Windows is opt-in because it is a mingw
-**cross** build rather than a native one — the derivation's build platform
-is `x86_64-linux`, so an ordinary Linux runner produces the PE, and only a
-module whose flake exposes `packages.x86_64-windows` has anything to build:
+The first three non-Intel variants are the default. Windows is opt-in
+because it is a mingw **cross** build rather than a native one — the
+derivation's build platform is `x86_64-linux`, so an ordinary Linux
+runner produces the PE, and only a module whose flake exposes
+`packages.x86_64-windows` has anything to build. `darwin-x86_64` is a
+native build but opt-in as well: `macos-15-intel` is GitHub's only Intel
+runner, kept for legacy macOS builds, so modules that no longer ship
+x86_64-darwin should not request it:
 
 ```yaml
     with:
