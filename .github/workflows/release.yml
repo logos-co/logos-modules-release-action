@@ -624,20 +624,21 @@ jobs:
           set -euo pipefail
           name=$(basename "$LGX_PATH")
           cid=""
+          networks='[]'
 
           # Loop over the networks
           for network in $(jq -r 'keys[]' <<<"$STORAGE_NODES"); do
             # Keep the successful upload count for this network.
-            # Zero successes fails the release, which means the network's
-            # storage nodes are down.
+            # Zero successes leaves the network out of the release, which
+            # means the network's storage nodes are down.
             ok=0
 
             endpoints=$(jq -r ".[\"$network\"][]" <<<"$STORAGE_NODES")
             total=$(wc -w <<<"$endpoints")
 
             if [[ "$total" -eq 0 ]]; then
-              echo "::error::No storage nodes configured for $network. Stopping the release."
-              exit 1
+              echo "::warning::No storage nodes configured for $network. Releasing without it."
+              continue
             fi
 
             for endpoint in $endpoints; do
@@ -662,15 +663,17 @@ jobs:
               ok=$((ok + 1))
             done
 
-            # Fails if every upload failed for this network, which means its storage nodes are down.
+            # Skips the network if every upload failed, which means its storage nodes are down.
             if [[ "$ok" -eq 0 ]]; then
-              echo "::error::Failed to upload the LGX package to the $network nodes."
-              exit 1
+              echo "::warning::Failed to upload the LGX package to the $network nodes. Releasing without it."
+              continue
             fi
+
+            networks=$(jq -c --arg network "$network" '. + [$network]' <<<"$networks")
           done
 
           echo "cid=$cid" >> "$GITHUB_OUTPUT"
-          echo "networks=$(jq -c 'keys' <<<"$STORAGE_NODES")" >> "$GITHUB_OUTPUT"
+          echo "networks=$networks" >> "$GITHUB_OUTPUT"
 
       - name: Extract manifest & build sidecar JSON
         id: sidecar
