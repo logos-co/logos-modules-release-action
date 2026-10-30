@@ -77,10 +77,21 @@ running platform's variant string itself (`windows-x86_64`, not
 `windows-amd64`) and has no alias fallback, so a mismatch reads to users as
 "Not Available" rather than as an error.
 
-The matrix is `fail-fast: false` and the release step merges whatever
-succeeded, so requesting a variant a module cannot build costs you a red leg
-and a partial release, not the whole module. Which variants made it is
-recorded in the sidecar as `builtVariants` / `missingVariants`.
+`variants` is an upper bound, not an exact list. Before the build matrix
+runs, the `setup` job evaluates the module's flake (`nix eval`) and keeps
+only the requested variants whose system actually exposes an
+`lgx-portable` output; the rest are skipped, not attempted. So you can
+list `windows-x86_64` for every module and only the ones that opt in will
+build it — requesting a variant a module doesn't define no longer costs a
+red leg or a partial release. (A module that exposes _none_ of the
+requested variants fails `setup` loudly rather than publishing nothing.)
+
+The matrix is still `fail-fast: false` as a safety net: a variant that is
+exposed can nonetheless fail to _build_, and the release step merges
+whatever succeeded and ships a partial release rather than dropping the
+whole module. Which variants made it is recorded in the sidecar as
+`builtVariants` / `missingVariants` (the latter being exposed-but-failed
+variants, not ones the module never offered).
 
 ### Runners
 
