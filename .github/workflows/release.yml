@@ -94,6 +94,18 @@ on:
           re-pointed at the commit that rebuilt them.
         type: boolean
         default: true
+      publish:
+        description: |
+          When true (default), build AND publish: merge the per-variant
+          packages, verify, sign, upload to the storage nodes, and
+          create/refresh the GitHub release. When false, run the build
+          legs ONLY — a CI build check: the merge/sign/release job is
+          skipped and no per-variant artifacts are uploaded. The build
+          legs still push their store paths to the Nix cache. Pair with
+          `skip_if_published: false` so a check always builds, even for a
+          version that is already published.
+        type: boolean
+        default: true
       runner:
         description: |
           Runner for every job except the build legs: a label, or a JSON
@@ -599,7 +611,11 @@ jobs:
       # `<module>-<variant>` keeps names unique across the umbrella
       # while the per-module standalone workflow still produces a
       # well-formed artifact set.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      # Only the release job consumes these; a build-only check
+      # (publish: false) skips the upload and just leaves the result in
+      # the Nix cache.
+      - if: inputs.publish
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: lgx-${{ needs.setup.outputs.module_name }}-${{ matrix.variant }}
           path: _artifacts/*.lgx
@@ -613,8 +629,11 @@ jobs:
     # step below errors when zero variants downloaded, so a total
     # build wipeout still fails the run loudly. `already_published`
     # short-circuits the whole pipeline (build was skipped too).
+    # `inputs.publish` gates the whole release job off for a build-only
+    # check, leaving just setup + build (the build check + cache push).
     if: >-
       always()
+      && inputs.publish
       && needs.setup.result == 'success'
       && needs.setup.outputs.already_published != 'true'
     runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner || 'ubuntu-latest' }}
@@ -951,7 +970,8 @@ jobs:
   # makes "already published" promptly imply "in the index".
   already-published:
     needs: setup
-    if: needs.setup.outputs.already_published == 'true'
+    # Never nudge the index for a build-only check.
+    if: inputs.publish && needs.setup.outputs.already_published == 'true'
     runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner || 'ubuntu-latest' }}
     permissions:
       contents: write
