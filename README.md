@@ -214,6 +214,37 @@ only rebuilds modules whose version actually moved.
 - Force a rebuild/republish of the same version with
   `skip_if_published: false`.
 
+### Build-only checks (`publish: false`)
+
+`publish: false` turns a release run into a CI build check. Every
+exposed variant is built exactly as for a release (same flake-exposed
+variant filter, same runners, same Nix-cache push), then merged and
+verified — and the merged, **unsigned** `<module>-<version>.lgx` is
+uploaded as a workflow artifact, downloadable from the run's summary
+page. Signing, the storage-node upload, the sidecar, the GitHub release,
+the tag and the index nudge are all skipped: nothing is published.
+
+Pair it with `skip_if_published: false` so a check always builds, even
+for a version that already exists:
+
+```yaml
+# PR build check for one module — no release
+jobs:
+  build:
+    uses: logos-co/logos-modules-release-action/.github/workflows/release.yml@v1
+    with:
+      module_path:       submodules/my-module
+      publish:           false
+      skip_if_published: false
+      build_runners:     '{"linux-amd64": ["self-hosted", "Linux", "X64"]}'
+    secrets:
+      ATTIC_TOKEN_CI: ${{ secrets.ATTIC_TOKEN_CI }}
+```
+
+A caller that fans this out over the submodules a PR changed gets a
+per-platform "does it still build?" gate without touching releases —
+see `logos-modules-release`'s `pr-build.yml`.
+
 ### Unpublishing (remove a module or a version)
 
 ```yaml
