@@ -216,12 +216,13 @@ only rebuilds modules whose version actually moved.
 
 ### Build-only checks (`publish: false`)
 
-`publish: false` runs the build legs **only** — a CI build check. The
-`setup` + `build` jobs run exactly as for a release (same flake-exposed
-variant filter, same runners, same Nix-cache push), but the merge /
-verify / sign / storage-upload / create-release job is skipped and no
-per-variant artifacts are uploaded. Nothing is published; the builds
-just land in the Nix cache for a later real release to reuse.
+`publish: false` turns a release run into a CI build check. Every
+exposed variant is built exactly as for a release (same flake-exposed
+variant filter, same runners, same Nix-cache push), then merged and
+verified — and the merged, **unsigned** `<module>-<version>.lgx` is
+uploaded as a workflow artifact, downloadable from the run's summary
+page. Signing, the storage-node upload, the sidecar, the GitHub release,
+the tag and the index nudge are all skipped: nothing is published.
 
 Pair it with `skip_if_published: false` so a check always builds, even
 for a version that already exists:

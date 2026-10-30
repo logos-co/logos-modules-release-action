@@ -98,12 +98,14 @@ on:
         description: |
           When true (default), build AND publish: merge the per-variant
           packages, verify, sign, upload to the storage nodes, and
-          create/refresh the GitHub release. When false, run the build
-          legs ONLY — a CI build check: the merge/sign/release job is
-          skipped and no per-variant artifacts are uploaded. The build
-          legs still push their store paths to the Nix cache. Pair with
-          `skip_if_published: false` so a check always builds, even for a
-          version that is already published.
+          create/refresh the GitHub release. When false — a CI build
+          check — build every variant, merge + verify them, and upload
+          the merged (unsigned) `<module>-<version>.lgx` as a workflow
+          artifact for download; signing, storage upload, the sidecar,
+          the GitHub release, the tag and the index nudge are all
+          skipped. The build legs still push their store paths to the
+          Nix cache. Pair with `skip_if_published: false` so a check
+          always builds, even for a version that is already published.
         type: boolean
         default: true
       runner:
@@ -611,11 +613,10 @@ jobs:
       # `<module>-<variant>` keeps names unique across the umbrella
       # while the per-module standalone workflow still produces a
       # well-formed artifact set.
-      # Only the release job consumes these; a build-only check
-      # (publish: false) skips the upload and just leaves the result in
-      # the Nix cache.
-      - if: inputs.publish
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      # Uploaded in both modes: the release job downloads these to merge
+      # the final package — and a build-only check (publish: false) merges
+      # them too, to offer the merged `.lgx` as a downloadable PR artifact.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: lgx-${{ needs.setup.outputs.module_name }}-${{ matrix.variant }}
           path: _artifacts/*.lgx
@@ -629,11 +630,13 @@ jobs:
     # step below errors when zero variants downloaded, so a total
     # build wipeout still fails the run loudly. `already_published`
     # short-circuits the whole pipeline (build was skipped too).
-    # `inputs.publish` gates the whole release job off for a build-only
-    # check, leaving just setup + build (the build check + cache push).
+    #
+    # This job runs in BOTH modes. With publish: false it stops after
+    # merge + verify and uploads the merged `.lgx` as a downloadable PR
+    # artifact; the individual publish steps (sign, storage, sidecar,
+    # create-release, tag, index) are each gated on `inputs.publish`.
     if: >-
       always()
-      && inputs.publish
       && needs.setup.result == 'success'
       && needs.setup.outputs.already_published != 'true'
     runs-on: ${{ startsWith(inputs.runner, '[') && fromJSON(inputs.runner) || inputs.runner || 'ubuntu-latest' }}
@@ -724,8 +727,19 @@ jobs:
       - name: Verify merged package (pre-sign)
         run: lgx verify "${{ steps.merge.outputs.lgx }}"
 
+      # Build-only check: offer the merged (unsigned) package as a
+      # downloadable PR artifact and stop here — the publish steps below
+      # are all gated off. `<module>-<version>.lgx` is unique per module,
+      # so it is safe when a caller fans this out over several modules.
+      - name: Upload merged package (build check)
+        if: ${{ !inputs.publish }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ needs.setup.outputs.module_name }}-${{ needs.setup.outputs.version }}
+          path: ${{ steps.merge.outputs.lgx }}
+
       - name: Sign (inline)
-        if: inputs.signing_mode == 'inline'
+        if: inputs.publish && inputs.signing_mode == 'inline'
         env:
           SIGNING_KEY: ${{ secrets.signing_key }}
         shell: bash
@@ -741,7 +755,7 @@ jobs:
           lgx verify "${{ steps.merge.outputs.lgx }}"
 
       - name: Sign (external)
-        if: inputs.signing_mode == 'external'
+        if: inputs.publish && inputs.signing_mode == 'external'
         shell: bash
         env:
           LGX_PATH: ${{ steps.merge.outputs.lgx }}
@@ -774,7 +788,7 @@ jobs:
 
       - name: Upload to the storage nodes
         id: seed
-        if: ${{ env.STORAGE_NODES != '' }}
+        if: ${{ inputs.publish && env.STORAGE_NODES != '' }}
         shell: bash
         env:
           LGX_PATH: ${{ steps.merge.outputs.lgx }}
@@ -835,6 +849,7 @@ jobs:
 
       - name: Extract manifest & build sidecar JSON
         id: sidecar
+        if: inputs.publish
         shell: bash
         run: |
           set -euo pipefail
@@ -916,6 +931,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Create / update GitHub release
+        if: inputs.publish
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ needs.setup.outputs.module_name }}-v${{ needs.setup.outputs.version }}
@@ -938,7 +954,7 @@ jobs:
       # `origin`, so it also works for private catalogs. Lightweight tag,
       # so no committer identity is needed.
       - name: Re-point tag at the built commit
-        if: success()
+        if: inputs.publish && success()
         shell: bash
         env:
           TAG: ${{ needs.setup.outputs.module_name }}-v${{ needs.setup.outputs.version }}
@@ -958,7 +974,7 @@ jobs:
           fi
 
       - name: Trigger rebuild-index workflow
-        if: success()
+        if: inputs.publish && success()
         uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0 # v3
         with:
           event-type: rebuild-index
