@@ -46,6 +46,14 @@ on:
         description: |
           Comma-separated list of variants to build. Supported:
           darwin-arm64, linux-amd64, linux-arm64, windows-x86_64.
+
+          This is the UPPER BOUND, not an exact list: the setup job
+          intersects it with the variants the module's flake actually
+          exposes (a `packages.<system>.lgx-portable` output) and the
+          build matrix fans out only over that intersection. A requested
+          variant the flake does not expose is skipped, not attempted and
+          failed — so callers can safely leave windows-x86_64 in the list
+          for every module and only those that opt in build it.
         type: string
         # The three native variants cover every GitHub-hosted runner
         # family available for public repos. windows-x86_64 is a mingw
@@ -143,10 +151,19 @@ jobs:
     permissions:
       contents: read
     outputs:
-      module_name:       ${{ steps.meta.outputs.module_name }}
-      version:           ${{ steps.meta.outputs.version }}
-      variants:          ${{ steps.meta.outputs.variants }}
-      already_published: ${{ steps.published.outputs.already_published }}
+      module_name:        ${{ steps.meta.outputs.module_name }}
+      version:            ${{ steps.meta.outputs.version }}
+      # What the caller asked for (parsed + validated), before the flake
+      # filter — kept for debugging / visibility.
+      requested_variants: ${{ steps.meta.outputs.variants }}
+      # What the build matrix fans out over: `requested_variants` narrowed
+      # to the variants the module's flake actually exposes (see the
+      # "Keep only variants the module's flake exposes" step). On the
+      # already-published skip path the filter step is skipped, so fall
+      # back to the requested list — the build job is gated off there and
+      # never reads it.
+      variants:           ${{ steps.filter.outputs.variants || steps.meta.outputs.variants }}
+      already_published:  ${{ steps.published.outputs.already_published }}
     steps:
       # fetch-depth: 0 produces a full (non-shallow) clone. Required
       # because module flake.nix files use `git+file://…` flake inputs
@@ -356,16 +373,69 @@ jobs:
           fi
           echo "already_published=false" >> "$GITHUB_OUTPUT"
 
+      - name: Set up Nix
+        # The filter step below evaluates the module's flake; the setup job
+        # is otherwise Nix-free. Read-only (no cache push tokens passed),
+        # like the release job's use of this action. Skipped on the
+        # already-published path so that path stays cheap.
+        if: steps.published.outputs.already_published != 'true'
+        uses: logos-co/setup-nix-cache-action@781f072122f4df6af0e33a7d355ebd20283e019e # v1.2.0
+
+      - id: filter
+        name: Keep only variants the module's flake exposes
+        # Mirrors the Jenkins combined pipeline's getModuleTargets(): ask the
+        # module's flake which of our four systems expose a
+        # `packages.<system>.lgx-portable` output, then build only the
+        # requested variants that map to one of them. This turns "attempt
+        # every requested variant, let unsupported legs fail into a partial
+        # release" into "only schedule legs that can actually produce an
+        # artifact" — e.g. no red windows-x86_64 leg on every module that
+        # hasn't opted in. `nix eval` (not build) is cheap; `--impure` +
+        # `tryEval` match the Jenkins probe and tolerate a system whose
+        # attrset fails to evaluate. Skipped on the already-published path
+        # (build is gated off there), so that path pays no Nix cost.
+        if: steps.published.outputs.already_published != 'true'
+        shell: bash
+        env:
+          MODULE_PATH: ${{ inputs.module_path }}
+          REQUESTED: ${{ steps.meta.outputs.variants }}
+        run: |
+          set -euo pipefail
+          cd "$MODULE_PATH"
+          # Systems exposing lgx-portable, as a JSON array, e.g.
+          # ["x86_64-linux","aarch64-linux"]. hasAttr guards a system the
+          # flake omits entirely; tryEval guards one whose attrset throws.
+          # Single-quoted so the inner "…" are literal to the shell.
+          exposed=$(nix eval --json --impure ".#packages" --apply \
+            'p: builtins.filter (s: builtins.hasAttr s p && (builtins.tryEval ((builtins.getAttr s p) ? "lgx-portable")).value) [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-windows" ]')
+          echo "flake exposes lgx-portable for: ${exposed}"
+          # Keep requested variants whose system is exposed, in their
+          # requested order. The variant->system map is the inverse of the
+          # build job's runner mapping (windows-x86_64 -> x86_64-windows).
+          filtered=$(jq -cn --argjson requested "$REQUESTED" --argjson exposed "$exposed" \
+            '{ "darwin-arm64": "aarch64-darwin", "linux-amd64": "x86_64-linux", "linux-arm64": "aarch64-linux", "windows-x86_64": "x86_64-windows" } as $sys
+             | [ $requested[] | select(. as $v | $exposed | index($sys[$v])) ]')
+          dropped=$(jq -cn --argjson requested "$REQUESTED" --argjson kept "$filtered" '$requested - $kept')
+          if [[ "$dropped" != "[]" ]]; then
+            echo "::notice::skipping requested variant(s) the flake does not expose: $(jq -r 'join(", ")' <<<"$dropped")"
+          fi
+          if [[ "$filtered" == "[]" ]]; then
+            echo "::error::the module's flake exposes none of the requested variants (requested ${REQUESTED}; lgx-portable systems ${exposed})"
+            exit 1
+          fi
+          echo "variants=$filtered" >> "$GITHUB_OUTPUT"
+
   build:
     needs: setup
     if: needs.setup.outputs.already_published != 'true'
     strategy:
-      # Not every module's flake.nix defines outputs for every variant
-      # — e.g. some modules pre-date the linux-arm64 default and only
-      # expose darwin-arm64 + linux-amd64. Let those variants fail
-      # individually without aborting the run; the release job below
-      # merges whatever variants succeeded and surfaces a partial
-      # release rather than dropping the whole module.
+      # `needs.setup.outputs.variants` is already narrowed to the variants
+      # the module's flake exposes (see the setup job's filter step), so a
+      # variant a module doesn't define never reaches this matrix. fail-fast
+      # stays false as a safety net: a variant that IS exposed can still
+      # fail to BUILD (a broken derivation, a cache miss), and the release
+      # job below merges whatever succeeded and surfaces a partial release
+      # rather than dropping the whole module.
       fail-fast: false
       matrix:
         variant: ${{ fromJson(needs.setup.outputs.variants) }}
@@ -380,9 +450,10 @@ jobs:
     #
     #   * with the default variants, `- variant: windows-x86_64` matches
     #     nothing and appends a 4th, uninvited windows-x86_64 job to EVERY
-    #     caller. Modules whose flake exposes no packages.x86_64-windows
-    #     (i.e. every module that has not opted in) fail that leg and
-    #     publish a partial release.
+    #     caller — one the setup filter cannot suppress, since it is an
+    #     extra matrix combination rather than a listed variant. Modules
+    #     whose flake exposes no packages.x86_64-windows would then fail
+    #     that leg and publish a partial release.
     #   * symmetrically, a caller narrowing `variants:` to "linux-amd64"
     #     gets phantom darwin-arm64 and linux-arm64 jobs from the two
     #     unmatched native entries.
@@ -766,17 +837,20 @@ jobs:
             echo "::error::manifest.sig in $lgx is not a JSON object"
             exit 1
           fi
-          # Partial-variant visibility: which variants were requested
-          # (setup output) vs actually built (merge output). The build
-          # matrix uses fail-fast:false, so a release can legitimately
-          # ship fewer variants than requested — record exactly which,
-          # so operators and clients don't have to diff release assets
-          # by hand. Additive sidecar fields; schemaVersion is unchanged
-          # and consumers that ignore unknown keys are unaffected.
-          requested_json='${{ needs.setup.outputs.variants }}'
+          # Partial-variant visibility: which variants were targeted vs
+          # actually built (merge output). "Targeted" is the setup job's
+          # post-filter `variants` — the requested set narrowed to what the
+          # flake exposes — so `missingVariants` now flags only variants
+          # that were supposed to build but didn't (fail-fast:false lets a
+          # genuine build failure ship a partial release), never a variant
+          # the module simply doesn't offer. Record exactly which, so
+          # operators and clients don't have to diff release assets by
+          # hand. Additive sidecar fields; schemaVersion is unchanged and
+          # consumers that ignore unknown keys are unaffected.
+          targeted_json='${{ needs.setup.outputs.variants }}'
           built_json=$(printf '%s' '${{ steps.merge.outputs.built }}' \
                        | jq -R 'split(",") | map(select(length>0))')
-          missing_json=$(jq -cn --argjson r "$requested_json" --argjson b "$built_json" '$r - $b')
+          missing_json=$(jq -cn --argjson r "$targeted_json" --argjson b "$built_json" '$r - $b')
 
           jq -n \
              --arg releaseTag "${{ needs.setup.outputs.module_name }}-v${{ needs.setup.outputs.version }}" \
