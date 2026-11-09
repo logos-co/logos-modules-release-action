@@ -85,7 +85,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: logos-co/logos-modules-release-tool
-          ref: v1.3
+          ref: v1.4
           path: _tool
 
       # Collect every published `.lgx` URL from the caller's releases.
@@ -121,7 +121,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # All three exist even when the catalog has no releases yet: the
+          # loops below only append, and the build step reads urls.txt and
+          # releases.txt.
+          : > releases.txt
           : > lgx.txt
+          : > urls.txt
           gh api \
             "repos/${{ github.repository }}/releases" --paginate \
             --jq '
@@ -130,6 +135,7 @@ jobs:
               | select(.tag_name != "index")
               | .id
             ' |
+          tee releases.txt |
           while read -r release_id; do
             gh api \
               "repos/${{ github.repository }}/releases/${release_id}/assets" --paginate \
@@ -173,7 +179,16 @@ jobs:
           # a slash is not valid in an asset name — so the flat layout is what
           # this transport requires. `icon.path` in the index is resolved
           # relative to the index URL, so clients need no special handling.
-          python3 _tool/index.py build urls.txt -o index.json --icons-dir ""
+          # --allow-empty only when the repo has no releases at all (nothing
+          # published yet, or every module unpublished): that catalog gets an
+          # index with no packages instead of a failed run that keeps a stale
+          # index.json. Releases without a collected .lgx, e.g. mid-replacement
+          # during a force republish, still fail the build, so a transient gap
+          # cannot publish an empty catalog over a real one.
+          allow_empty=""
+          if [ ! -s releases.txt ]; then allow_empty="--allow-empty"; fi
+          python3 _tool/index.py build urls.txt -o index.json --icons-dir "" \
+            ${allow_empty:+"$allow_empty"}
           # Small at-a-glance summary in the workflow log.
           jq '{ schemaVersion, repositoryName, packageCount: (.packages | length) }' index.json
           # find, not `ls | wc -l`: shellcheck SC2012/SC2035, and the
